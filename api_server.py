@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import hashlib
 import io
 import math
 import mimetypes
@@ -29,19 +30,11 @@ try:
         build_sales_pdf_report,
         get_logo_path,
         init_db as init_local_db,
-        parse_inventory_upload,
-        parse_payments_upload,
-        save_inventory_snapshot,
-        save_transactions,
     )
 except Exception:
     build_sales_pdf_report = None
     get_logo_path = None
     init_local_db = None
-    parse_inventory_upload = None
-    parse_payments_upload = None
-    save_inventory_snapshot = None
-    save_transactions = None
 
 DB_PATH = Path(os.getenv("DB_PATH", "data/sales_dashboard.db"))
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
@@ -54,6 +47,39 @@ SUPABASE_STORAGE_PREFIX = os.getenv("SUPABASE_STORAGE_PREFIX", "iqbar").strip().
 ENV_PATH = Path(".env")
 POSTGRES_SCHEMA_PATH = Path(__file__).resolve().parent / "backend" / "sql" / "postgres_schema.sql"
 logger = logging.getLogger("iqbar.api_server")
+
+MONEY_COLUMNS = [
+    "product sales",
+    "product sales tax",
+    "shipping credits",
+    "shipping credits tax",
+    "gift wrap credits",
+    "giftwrap credits tax",
+    "regulatory fee",
+    "tax on regulatory fee",
+    "promotional rebates",
+    "promotional rebates tax",
+    "marketplace withheld tax",
+    "selling fees",
+    "fba fees",
+    "other transaction fees",
+    "other",
+    "total",
+]
+
+SALES_O_TO_Y_COLUMNS = [
+    "product sales",
+    "product sales tax",
+    "shipping credits",
+    "shipping credits tax",
+    "gift wrap credits",
+    "giftwrap credits tax",
+    "regulatory fee",
+    "tax on regulatory fee",
+    "promotional rebates",
+    "promotional rebates tax",
+    "marketplace withheld tax",
+]
 
 
 def load_local_env(path: Path = ENV_PATH) -> None:
@@ -497,6 +523,381 @@ def normalize_product_line(line: Optional[str]) -> str:
     if p in {"IQBAR", "IQMIX", "IQJOE"}:
         return p
     raise ValueError("product_line must be one of: IQBAR, IQMIX, IQJOE")
+
+
+def normalize_product_line_from_text(value: str) -> str:
+    text = str(value or "").upper()
+    if "IQBAR" in text:
+        return "IQBAR"
+    if "IQMIX" in text:
+        return "IQMIX"
+    if "IQJOE" in text:
+        return "IQJOE"
+    return "Unmapped"
+
+
+def _norm_cols(columns: list[str]) -> list[str]:
+    return [str(c).strip().lower().replace("\ufeff", "") for c in columns]
+
+
+def _detect_header_row_csv(text: str) -> int:
+    for idx, line in enumerate(text.splitlines()[:80]):
+        low = line.lower()
+        if "date/time" in low and "order id" in low and "total" in low:
+            return idx
+    return 0
+
+
+def _detect_header_row_xlsx(df_head: pd.DataFrame) -> Optional[int]:
+    for idx in range(min(80, len(df_head))):
+        row = [str(v).strip().lower() for v in df_head.iloc[idx].tolist()]
+        if "date/time" in row and "order id" in row and "total" in row:
+            return idx
+    return None
+
+
+def _key_part(value) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() == "nan" else text
+
+
+def build_tx_key(
+    date_time: str,
+    tx_type: str,
+    order_id: str,
+    sku: str,
+    total: float,
+    quantity: float,
+    description: str,
+) -> str:
+    raw = "|".join(
+        [
+            _key_part(date_time),
+            _key_part(tx_type).upper(),
+            _key_part(order_id).upper(),
+            _key_part(sku).upper(),
+            f"{float(total):.4f}" if total is not None and str(total) != "" else "",
+            f"{float(quantity):.4f}" if quantity is not None and str(quantity) != "" else "",
+            _key_part(description).upper(),
+        ]
+    )
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def parse_payments_upload(file_name: str, file_bytes: bytes) -> pd.DataFrame:
+    lower_name = str(file_name or "").lower()
+    if lower_name.endswith(".csv"):
+        text = file_bytes.decode("utf-8-sig", errors="replace")
+        header_row = _detect_header_row_csv(text)
+        df = pd.read_csv(io.StringIO(text), skiprows=header_row)
+    elif lower_name.endswith(".xlsx"):
+        xlsx = io.BytesIO(file_bytes)
+        sheet_names = pd.ExcelFile(xlsx).sheet_names
+        df = None
+        for sheet in sheet_names:
+            xlsx.seek(0)
+            head = pd.read_excel(xlsx, sheet_name=sheet, header=None, nrows=100)
+            header_row = _detect_header_row_xlsx(head)
+            if header_row is None:
+                continue
+            xlsx.seek(0)
+            df = pd.read_excel(xlsx, sheet_name=sheet, header=header_row)
+            break
+        if df is None:
+            raise ValueError("Could not find a sheet header containing date/time, order id, and total.")
+    else:
+        raise ValueError("Unsupported file type. Use .csv or .xlsx")
+
+    df.columns = _norm_cols(df.columns.tolist())
+    if "date/time" not in df.columns:
+        raise ValueError("Could not parse payments file: missing 'date/time' column after header detection.")
+
+    for col in MONEY_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+        else:
+            df[col] = 0.0
+    if "quantity" in df.columns:
+        df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0.0)
+    else:
+        df["quantity"] = 0.0
+
+    cleaned = df["date/time"].astype(str).str.replace(r"\s[A-Z]{2,4}$", "", regex=True).str.strip()
+    df["parsed_timestamp"] = pd.to_datetime(cleaned, format="%b %d, %Y %I:%M:%S %p", errors="coerce")
+    df["date"] = df["parsed_timestamp"].dt.date.astype(str)
+
+    for col in ["type", "order id", "order city", "order state", "order postal", "sku", "description", "transaction status"]:
+        if col not in df.columns:
+            df[col] = ""
+
+    df["sales_o_to_y"] = 0.0
+    for col in SALES_O_TO_Y_COLUMNS:
+        df["sales_o_to_y"] += df[col]
+
+    return pd.DataFrame(
+        {
+            "date_time": df["date/time"].astype(str),
+            "date": df["date"].astype(str),
+            "type": df["type"].astype(str),
+            "order_id": df["order id"].astype(str),
+            "order_state": df["order state"].astype(str),
+            "order_city": df["order city"].astype(str),
+            "order_postal": df["order postal"].astype(str),
+            "sku": df["sku"].astype(str),
+            "description": df["description"].astype(str),
+            "quantity": df["quantity"].astype(float),
+            "product_sales": df["product sales"],
+            "product_sales_tax": df["product sales tax"],
+            "shipping_credits": df["shipping credits"],
+            "shipping_credits_tax": df["shipping credits tax"],
+            "gift_wrap_credits": df["gift wrap credits"],
+            "giftwrap_credits_tax": df["giftwrap credits tax"],
+            "regulatory_fee": df["regulatory fee"],
+            "tax_on_regulatory_fee": df["tax on regulatory fee"],
+            "promotional_rebates": df["promotional rebates"],
+            "promotional_rebates_tax": df["promotional rebates tax"],
+            "marketplace_withheld_tax": df["marketplace withheld tax"],
+            "selling_fees": df["selling fees"],
+            "fba_fees": df["fba fees"],
+            "other_transaction_fees": df["other transaction fees"],
+            "other": df["other"],
+            "total": df["total"],
+            "transaction_status": df["transaction status"].astype(str),
+            "sales_o_to_y": df["sales_o_to_y"],
+        }
+    )
+
+
+def parse_inventory_upload(file_name: str, file_bytes: bytes) -> pd.DataFrame:
+    lower_name = str(file_name or "").lower()
+    if lower_name.endswith(".csv"):
+        try:
+            raw = pd.read_csv(io.BytesIO(file_bytes), encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            raw = pd.read_csv(io.BytesIO(file_bytes), encoding="latin1")
+    elif lower_name.endswith(".xlsx"):
+        raw = pd.read_excel(io.BytesIO(file_bytes))
+    else:
+        raise ValueError("Unsupported inventory file type. Use .csv or .xlsx")
+
+    raw.columns = _norm_cols(raw.columns.tolist())
+    required = {"sku", "asin", "product-name"}
+    if not required.issubset(set(raw.columns)):
+        raise ValueError("Inventory file missing required columns: sku, asin, product-name")
+
+    numeric_cols = [
+        "your-price",
+        "afn-warehouse-quantity",
+        "afn-fulfillable-quantity",
+        "afn-unsellable-quantity",
+        "afn-reserved-quantity",
+        "afn-total-quantity",
+        "afn-inbound-working-quantity",
+        "afn-inbound-shipped-quantity",
+        "afn-inbound-receiving-quantity",
+        "afn-researching-quantity",
+    ]
+    for col in numeric_cols:
+        if col in raw.columns:
+            raw[col] = pd.to_numeric(raw[col], errors="coerce").fillna(0.0)
+        else:
+            raw[col] = 0.0
+
+    for col in ["sku", "fnsku", "asin", "product-name", "condition"]:
+        if col not in raw.columns:
+            raw[col] = ""
+        raw[col] = raw[col].fillna("").astype(str).str.strip()
+
+    out = pd.DataFrame(
+        {
+            "sku": raw["sku"],
+            "fnsku": raw["fnsku"],
+            "asin": raw["asin"],
+            "product_name": raw["product-name"],
+            "condition": raw["condition"],
+            "your_price": raw["your-price"],
+            "afn_warehouse_quantity": raw["afn-warehouse-quantity"],
+            "afn_fulfillable_quantity": raw["afn-fulfillable-quantity"],
+            "afn_unsellable_quantity": raw["afn-unsellable-quantity"],
+            "afn_reserved_quantity": raw["afn-reserved-quantity"],
+            "afn_total_quantity": raw["afn-total-quantity"],
+            "afn_inbound_working_quantity": raw["afn-inbound-working-quantity"],
+            "afn_inbound_shipped_quantity": raw["afn-inbound-shipped-quantity"],
+            "afn_inbound_receiving_quantity": raw["afn-inbound-receiving-quantity"],
+            "afn_researching_quantity": raw["afn-researching-quantity"],
+        }
+    )
+    out["product_line"] = out["product_name"].map(normalize_product_line_from_text)
+    out = out[out["sku"] != ""].drop_duplicates(subset=["sku", "asin", "fnsku"], keep="first")
+    return out
+
+
+def save_transactions(df: pd.DataFrame, source_file: str, channel: str = "Amazon") -> tuple[int, int]:
+    if df.empty:
+        return 0, 0
+    ch = normalize_channel(channel)
+    conn = db_conn()
+    imported_at = datetime.now().isoformat(timespec="seconds")
+    to_save = df.copy()
+    to_save["tx_key"] = to_save.apply(
+        lambda r: build_tx_key(
+            r.get("date_time", ""),
+            r.get("type", ""),
+            r.get("order_id", ""),
+            r.get("sku", ""),
+            r.get("total", 0.0),
+            r.get("quantity", 0.0),
+            r.get("description", ""),
+        ),
+        axis=1,
+    )
+    to_save = to_save.drop_duplicates(subset=["tx_key"], keep="first").copy()
+    incoming = to_save["tx_key"].dropna().astype(str).tolist()
+    existing: set[str] = set()
+    chunk_size = 1000
+    for i in range(0, len(incoming), chunk_size):
+        chunk = incoming[i : i + chunk_size]
+        if not chunk:
+            continue
+        placeholders = ",".join(["?"] * len(chunk))
+        rows = conn.execute(f"SELECT tx_key FROM transactions WHERE tx_key IN ({placeholders})", tuple(chunk)).fetchall()
+        for r in rows or []:
+            existing.add(str(r["tx_key"] if isinstance(r, dict) else r[0]))
+    before_batch = int(len(to_save))
+    if existing:
+        to_save = to_save[~to_save["tx_key"].isin(existing)].copy()
+    skipped = before_batch - int(len(to_save))
+
+    if to_save.empty:
+        conn.execute(
+            """
+            INSERT INTO imports (imported_at, source_file, row_count, min_date, max_date, total_sales_o_to_y, channel)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (imported_at, source_file, 0, None, None, 0.0, ch),
+        )
+        conn.commit()
+        conn.close()
+        return 0, skipped
+
+    conn.executemany(
+        """
+        INSERT INTO transactions (
+            imported_at, source_file, date_time, date, type, order_id, order_state, order_city, order_postal, sku, description, quantity,
+            product_sales, product_sales_tax, shipping_credits, shipping_credits_tax, gift_wrap_credits, giftwrap_credits_tax,
+            regulatory_fee, tax_on_regulatory_fee, promotional_rebates, promotional_rebates_tax, marketplace_withheld_tax, selling_fees,
+            fba_fees, other_transaction_fees, other, total, transaction_status, sales_o_to_y, tx_key, channel
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                imported_at,
+                source_file,
+                str(r.get("date_time") or ""),
+                str(r.get("date") or ""),
+                str(r.get("type") or ""),
+                str(r.get("order_id") or ""),
+                str(r.get("order_state") or ""),
+                str(r.get("order_city") or ""),
+                str(r.get("order_postal") or ""),
+                str(r.get("sku") or ""),
+                str(r.get("description") or ""),
+                float(r.get("quantity") or 0.0),
+                float(r.get("product_sales") or 0.0),
+                float(r.get("product_sales_tax") or 0.0),
+                float(r.get("shipping_credits") or 0.0),
+                float(r.get("shipping_credits_tax") or 0.0),
+                float(r.get("gift_wrap_credits") or 0.0),
+                float(r.get("giftwrap_credits_tax") or 0.0),
+                float(r.get("regulatory_fee") or 0.0),
+                float(r.get("tax_on_regulatory_fee") or 0.0),
+                float(r.get("promotional_rebates") or 0.0),
+                float(r.get("promotional_rebates_tax") or 0.0),
+                float(r.get("marketplace_withheld_tax") or 0.0),
+                float(r.get("selling_fees") or 0.0),
+                float(r.get("fba_fees") or 0.0),
+                float(r.get("other_transaction_fees") or 0.0),
+                float(r.get("other") or 0.0),
+                float(r.get("total") or 0.0),
+                str(r.get("transaction_status") or ""),
+                float(r.get("sales_o_to_y") or 0.0),
+                str(r.get("tx_key") or ""),
+                ch,
+            )
+            for _, r in to_save.iterrows()
+        ],
+    )
+    conn.execute(
+        """
+        INSERT INTO imports (imported_at, source_file, row_count, min_date, max_date, total_sales_o_to_y, channel)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            imported_at,
+            source_file,
+            int(len(to_save)),
+            str(to_save["date"].min()) if len(to_save) else None,
+            str(to_save["date"].max()) if len(to_save) else None,
+            float(to_save["sales_o_to_y"].sum()),
+            ch,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return int(len(to_save)), skipped
+
+
+def save_inventory_snapshot(df: pd.DataFrame, source_file: str) -> tuple[int, int]:
+    if df.empty:
+        return 0, 0
+    conn = db_conn()
+    imported_at = datetime.now().isoformat(timespec="seconds")
+    cur = conn.execute(
+        """
+        INSERT INTO inventory_snapshots (imported_at, source_file, row_count)
+        VALUES (?, ?, ?)
+        """,
+        (imported_at, source_file, int(len(df))),
+    )
+    snapshot_id = int(cur.lastrowid or 0)
+    conn.executemany(
+        """
+        INSERT INTO inventory_items (
+            snapshot_id, imported_at, source_file, sku, fnsku, asin, product_name, condition, your_price,
+            afn_warehouse_quantity, afn_fulfillable_quantity, afn_unsellable_quantity, afn_reserved_quantity, afn_total_quantity,
+            afn_inbound_working_quantity, afn_inbound_shipped_quantity, afn_inbound_receiving_quantity, afn_researching_quantity, product_line
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                snapshot_id,
+                imported_at,
+                source_file,
+                str(r.get("sku") or ""),
+                str(r.get("fnsku") or ""),
+                str(r.get("asin") or ""),
+                str(r.get("product_name") or ""),
+                str(r.get("condition") or ""),
+                float(r.get("your_price") or 0.0),
+                float(r.get("afn_warehouse_quantity") or 0.0),
+                float(r.get("afn_fulfillable_quantity") or 0.0),
+                float(r.get("afn_unsellable_quantity") or 0.0),
+                float(r.get("afn_reserved_quantity") or 0.0),
+                float(r.get("afn_total_quantity") or 0.0),
+                float(r.get("afn_inbound_working_quantity") or 0.0),
+                float(r.get("afn_inbound_shipped_quantity") or 0.0),
+                float(r.get("afn_inbound_receiving_quantity") or 0.0),
+                float(r.get("afn_researching_quantity") or 0.0),
+                str(r.get("product_line") or "Unmapped"),
+            )
+            for _, r in df.iterrows()
+        ],
+    )
+    conn.commit()
+    conn.close()
+    return snapshot_id, int(len(df))
 
 
 def parse_ntb_upload(file_name: str, file_bytes: bytes) -> pd.DataFrame:
@@ -2375,8 +2776,6 @@ def import_date_coverage(
 
 @app.post("/api/import/payments")
 async def import_payments(files: list[UploadFile] = File(...), channel: str = "Amazon") -> dict:
-    if parse_payments_upload is None or save_transactions is None:
-        return {"ok": False, "error": "Payments parser not available in API runtime."}
     ch = normalize_channel(channel)
     imported = 0
     duplicates_skipped = 0
@@ -2386,36 +2785,9 @@ async def import_payments(files: list[UploadFile] = File(...), channel: str = "A
             raw = await f.read()
             raw_path = persist_raw_upload(f.filename or "", raw, data_type="payments", channel=ch)
             parsed = parse_payments_upload(f.filename, raw)
-            ins, dup = save_transactions(parsed, f.filename)
+            ins, dup = save_transactions(parsed, f.filename, channel=ch)
         except Exception as exc:
             return {"ok": False, "error": f"Payments import failed for {f.filename}: {exc}"}
-        conn = db_conn()
-        try:
-            imported_meta = conn.execute(
-                "SELECT imported_at FROM imports WHERE source_file = ? ORDER BY imported_at DESC LIMIT 1",
-                (f.filename,),
-            ).fetchone()
-            imported_at = imported_meta["imported_at"] if imported_meta else None
-            if imported_at:
-                conn.execute(
-                    """
-                    UPDATE transactions
-                    SET channel = ?
-                    WHERE source_file = ? AND imported_at = ?
-                    """,
-                    (ch, f.filename, imported_at),
-                )
-                conn.execute(
-                    """
-                    UPDATE imports
-                    SET channel = ?
-                    WHERE source_file = ? AND imported_at = ?
-                    """,
-                    (ch, f.filename, imported_at),
-                )
-            conn.commit()
-        finally:
-            conn.close()
         imported += int(ins)
         duplicates_skipped += int(dup)
         details.append({"file": f.filename, "inserted": int(ins), "duplicates_skipped": int(dup), "raw_path": raw_path})
@@ -2452,8 +2824,6 @@ async def import_shopify_line(
 
 @app.post("/api/import/inventory")
 async def import_inventory(files: list[UploadFile] = File(...)) -> dict:
-    if parse_inventory_upload is None or save_inventory_snapshot is None:
-        return {"ok": False, "error": "Inventory parser not available in API runtime."}
     snapshots = []
     for f in files:
         raw = await f.read()
