@@ -14,7 +14,7 @@ import {
   Line,
   Legend,
 } from "recharts";
-import { SignIn, useAuth } from "@clerk/nextjs";
+import { SignIn, useAuth, useClerk, useUser } from "@clerk/nextjs";
 import { apiGet, setApiTokenProvider } from "../lib/api";
 import { fmtMoney, fmtPct, ymd } from "../lib/format";
 import KpiCard from "../components/KpiCard";
@@ -265,6 +265,8 @@ function calcCompareRangeJs(startDate, endDate, mode) {
 
 export default function Page() {
   const { isLoaded, isSignedIn, getToken } = useAuth();
+  const { signOut } = useClerk();
+  const { user } = useUser();
   const [tokenReady, setTokenReady] = useState(false);
   const [activeTab, setActiveTab] = useState("sales");
   const [workspaceChannel, setWorkspaceChannel] = useState("Amazon");
@@ -389,7 +391,7 @@ export default function Page() {
     brandingLogo: "",
     isActive: true,
   });
-  const [userRole, setUserRole] = useState("Admin");
+  const [userRole, setUserRole] = useState("Viewer");
   const [flows, setFlows] = useState([]);
   const [selectedFlowId, setSelectedFlowId] = useState("");
   const [selectedFlowNode, setSelectedFlowNode] = useState({ kind: "trigger", index: -1 });
@@ -543,7 +545,6 @@ export default function Page() {
       setFbaSkuMap(JSON.parse(window.localStorage.getItem("iq_fba_sku_v1") || "{}"));
       setFeeCfg({ ...feeCfg, ...(JSON.parse(window.localStorage.getItem("iq_fee_cfg_v1") || "{}")) });
       setPromotions(JSON.parse(window.localStorage.getItem("iq_promotions_v1") || "[]"));
-      setUserRole(window.localStorage.getItem("iq_user_role_v1") || "Admin");
       setReportSchedules(JSON.parse(window.localStorage.getItem("iq_report_schedules_v1") || "[]"));
       setReportHistory(JSON.parse(window.localStorage.getItem("iq_report_history_v1") || "[]"));
       setFlows(JSON.parse(window.localStorage.getItem("iq_flows_v1") || "[]"));
@@ -589,11 +590,6 @@ export default function Page() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem("iq_report_history_v1", JSON.stringify(reportHistory || []));
   }, [reportHistory]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem("iq_user_role_v1", userRole);
-  }, [userRole]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -719,7 +715,7 @@ export default function Page() {
       setTokenReady(false);
       return;
     }
-    setApiTokenProvider(() => getToken());
+    setApiTokenProvider(() => getToken({ skipCache: true }));
     setTokenReady(true);
     return () => setApiTokenProvider(null);
   }, [isLoaded, isSignedIn, getToken]);
@@ -2002,14 +1998,22 @@ export default function Page() {
           ))}
           <div className="sidebar-bottom">
             <div className="sidebar-user">
-              <div className="sidebar-avatar">JH</div>
+              <div className="sidebar-avatar">{String(user?.firstName || user?.primaryEmailAddress?.emailAddress || "U").slice(0, 1).toUpperCase()}</div>
               {!sidebarCollapsed && (
                 <div className="sidebar-user-info">
-                  <div className="sidebar-user-name">Jake Honig</div>
+                  <div className="sidebar-user-name">{user?.fullName || user?.primaryEmailAddress?.emailAddress || "User"}</div>
                   <div className="sidebar-user-role">{userRole} · {workspaceChannel}</div>
                 </div>
               )}
             </div>
+            <button
+              className="sidebar-collapse-btn"
+              onClick={async () => {
+                await signOut();
+              }}
+            >
+              Sign Out
+            </button>
             <button className="sidebar-collapse-btn" onClick={() => setSidebarCollapsed((v) => !v)}>
               {sidebarCollapsed ? "» Expand" : "« Collapse"}
             </button>
