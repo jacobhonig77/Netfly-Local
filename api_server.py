@@ -125,6 +125,23 @@ def init_api_tables() -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS monthly_goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            year INTEGER NOT NULL,
+            month INTEGER NOT NULL,
+            channel TEXT NOT NULL,
+            product_line TEXT NOT NULL,
+            goal REAL NOT NULL,
+            source_file TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_monthly_goals_unique ON monthly_goals(year, month, channel, product_line)"
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS app_settings (
             setting_key TEXT PRIMARY KEY,
             setting_value TEXT NOT NULL,
