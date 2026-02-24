@@ -1440,6 +1440,19 @@ export default function Page() {
     );
   }
 
+  async function parseApiError(res, fallbackMessage) {
+    const rawText = await res.text().catch(() => "");
+    if (rawText) {
+      try {
+        const payload = JSON.parse(rawText);
+        return payload?.error || payload?.detail || `${fallbackMessage} (HTTP ${res.status})`;
+      } catch {
+        return `${fallbackMessage} (HTTP ${res.status}): ${rawText.slice(0, 300)}`;
+      }
+    }
+    return `${fallbackMessage} (HTTP ${res.status})`;
+  }
+
   async function onUploadPayments() {
     if (!uploadFiles.length) return;
     const form = new FormData();
@@ -1448,7 +1461,12 @@ export default function Page() {
       method: "POST",
       body: form,
     });
-    const payload = await res.json().catch(() => ({}));
+    let payload = {};
+    try {
+      payload = await res.json();
+    } catch {
+      payload = {};
+    }
     if (res.ok && payload?.ok !== false) {
       const history = await apiGet("/api/import/history", channelParams);
       setImportHistory(history.rows || []);
@@ -1457,7 +1475,8 @@ export default function Page() {
       await runFlowsByTrigger("on_import_payments");
       alert("Payments imported.");
     } else {
-      alert(payload?.error || "Import failed.");
+      const msg = payload?.error || payload?.detail || (await parseApiError(res, "Import failed"));
+      alert(msg);
     }
   }
 
@@ -1469,14 +1488,20 @@ export default function Page() {
       method: "POST",
       body: form,
     });
-    const payload = await res.json().catch(() => ({}));
+    let payload = {};
+    try {
+      payload = await res.json();
+    } catch {
+      payload = {};
+    }
     if (res.ok && payload?.ok !== false) {
       const invHist = await apiGet("/api/inventory/history");
       setInventoryHistory(invHist.rows || []);
       await runFlowsByTrigger("on_import_inventory");
       alert("Inventory imported.");
     } else {
-      alert(payload?.error || "Inventory import failed.");
+      const msg = payload?.error || payload?.detail || (await parseApiError(res, "Inventory import failed"));
+      alert(msg);
     }
   }
 
@@ -1488,14 +1513,20 @@ export default function Page() {
       method: "POST",
       body: form,
     });
-    const payload = await res.json().catch(() => ({}));
+    let payload = {};
+    try {
+      payload = await res.json();
+    } catch {
+      payload = {};
+    }
     if (res.ok && payload?.ok !== false) {
       const ntb = await apiGet("/api/ntb/monthly", channelParams);
       setNtbData(ntb || { rows: [], updated_from: null, updated_to: null, imported_at: null });
       await runFlowsByTrigger("on_import_ntb");
       alert("NTB imported.");
     } else {
-      alert(payload?.error || "NTB import failed.");
+      const msg = payload?.error || payload?.detail || (await parseApiError(res, "NTB import failed"));
+      alert(msg);
     }
   }
 
@@ -1508,9 +1539,15 @@ export default function Page() {
       method: "POST",
       body: form,
     });
-    const payload = await res.json().catch(() => ({}));
+    let payload = {};
+    try {
+      payload = await res.json();
+    } catch {
+      payload = {};
+    }
     if (!res.ok || !payload?.ok) {
-      alert(payload?.error || `Shopify ${productLine} import failed.`);
+      const msg = payload?.error || payload?.detail || (await parseApiError(res, `Shopify ${productLine} import failed`));
+      alert(msg);
       return;
     }
     const [history, coverage, m] = await Promise.all([
@@ -1531,9 +1568,15 @@ export default function Page() {
     if (typeof window !== "undefined" && !window.confirm(msg)) return;
     const base = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
     const res = await fetch(`${base}/api/import/payments?import_id=${encodeURIComponent(row.id)}&channel=${encodeURIComponent(workspaceChannel)}`, { method: "DELETE" });
-    const payload = await res.json();
+    let payload = {};
+    try {
+      payload = await res.json();
+    } catch {
+      payload = {};
+    }
     if (!res.ok || !payload?.ok) {
-      alert(payload?.error || "Delete failed.");
+      const msg = payload?.error || payload?.detail || (await parseApiError(res, "Delete failed"));
+      alert(msg);
       return;
     }
     const [history, coverage, m] = await Promise.all([
@@ -1555,9 +1598,15 @@ export default function Page() {
       method: "POST",
       body: form,
     });
-    const payload = await res.json();
+    let payload = {};
+    try {
+      payload = await res.json();
+    } catch {
+      payload = {};
+    }
     if (!res.ok || !payload?.ok) {
-      setCogsImportMsg(payload?.error || "COGS import failed.");
+      const msg = payload?.error || payload?.detail || (await parseApiError(res, "COGS import failed"));
+      setCogsImportMsg(msg);
       return;
     }
     const nextCogs = {};
