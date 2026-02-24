@@ -142,6 +142,64 @@ def init_api_tables() -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS sku_mapping (
+            sku_key TEXT PRIMARY KEY,
+            sku TEXT,
+            asin TEXT,
+            parent_asin TEXT,
+            brand TEXT,
+            tag TEXT,
+            product_line TEXT,
+            unit_count TEXT,
+            flavor_name TEXT,
+            size TEXT,
+            cogs REAL,
+            price REAL,
+            promo REAL,
+            link_to_pdp TEXT,
+            updated_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inventory_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            imported_at TEXT NOT NULL,
+            source_file TEXT NOT NULL,
+            row_count INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inventory_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id INTEGER NOT NULL,
+            imported_at TEXT NOT NULL,
+            source_file TEXT NOT NULL,
+            sku TEXT,
+            fnsku TEXT,
+            asin TEXT,
+            product_name TEXT,
+            condition TEXT,
+            your_price REAL,
+            afn_warehouse_quantity REAL,
+            afn_fulfillable_quantity REAL,
+            afn_unsellable_quantity REAL,
+            afn_reserved_quantity REAL,
+            afn_total_quantity REAL,
+            afn_inbound_working_quantity REAL,
+            afn_inbound_shipped_quantity REAL,
+            afn_inbound_receiving_quantity REAL,
+            afn_researching_quantity REAL,
+            product_line TEXT,
+            FOREIGN KEY(snapshot_id) REFERENCES inventory_snapshots(id)
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS app_settings (
             setting_key TEXT PRIMARY KEY,
             setting_value TEXT NOT NULL,
