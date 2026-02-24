@@ -1490,7 +1490,10 @@ def product_sku_summary(
         WHERE t.date BETWEEN ? AND ?
           AND COALESCE(t.channel,'Amazon') = ?
           AND COALESCE(m.product_line, 'Unmapped') = ?
-          AND (? IS NULL OR LOWER(TRIM(COALESCE(m.tag, t.sku))) = LOWER(TRIM(?)))
+          AND (
+            COALESCE(CAST(? AS TEXT), '') = ''
+            OR LOWER(TRIM(COALESCE(m.tag, t.sku))) = LOWER(TRIM(CAST(? AS TEXT)))
+          )
         GROUP BY 1
         ORDER BY sales DESC
         LIMIT 100
@@ -1610,7 +1613,10 @@ def product_top_movers(
         WHERE t.date BETWEEN ? AND ?
           AND COALESCE(t.channel,'Amazon') = ?
           AND COALESCE(m.product_line, 'Unmapped') = ?
-          AND (? IS NULL OR LOWER(TRIM(COALESCE(m.tag, t.sku))) = LOWER(TRIM(?)))
+          AND (
+            COALESCE(CAST(? AS TEXT), '') = ''
+            OR LOWER(TRIM(COALESCE(m.tag, t.sku))) = LOWER(TRIM(CAST(? AS TEXT)))
+          )
         GROUP BY t.sku
         """,
         (str(start), str(end), ch, product_line, product_tag, product_tag),
@@ -1626,7 +1632,10 @@ def product_top_movers(
         WHERE t.date BETWEEN ? AND ?
           AND COALESCE(t.channel,'Amazon') = ?
           AND COALESCE(m.product_line, 'Unmapped') = ?
-          AND (? IS NULL OR LOWER(TRIM(COALESCE(m.tag, t.sku))) = LOWER(TRIM(?)))
+          AND (
+            COALESCE(CAST(? AS TEXT), '') = ''
+            OR LOWER(TRIM(COALESCE(m.tag, t.sku))) = LOWER(TRIM(CAST(? AS TEXT)))
+          )
         GROUP BY t.sku
         """,
         (str(prev_start), str(prev_end), ch, product_line, product_tag, product_tag),
