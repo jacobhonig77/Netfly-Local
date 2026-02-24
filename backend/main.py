@@ -14,6 +14,19 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 os.chdir(ROOT_DIR)
 
+
+def _parse_cors_origins(raw: str) -> list[str]:
+    value = (raw or "*").strip()
+    if value == "*":
+        return ["*"]
+    return [v.strip() for v in value.split(",") if v.strip()]
+
+
+# Optional env override so backend data path is explicit for deploy targets.
+# If unset, legacy default in api_server remains data/sales_dashboard.db.
+if os.getenv("SQLITE_PATH"):
+    os.environ["DB_PATH"] = os.getenv("SQLITE_PATH", "")
+
 from api_server import (  # noqa: E402
     business_monthly,
     forecast_mtd,
@@ -39,7 +52,7 @@ from api_server import (  # noqa: E402
 app = FastAPI(title="IQBAR Dashboard Backend", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_parse_cors_origins(os.getenv("BACKEND_CORS_ORIGINS", "*")),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -245,3 +258,13 @@ def dashboard(
         "workspace": workspace,
         "errors": errors,
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8000")),
+    )
