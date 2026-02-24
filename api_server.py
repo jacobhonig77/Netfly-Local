@@ -200,6 +200,26 @@ def init_api_tables() -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS asin_cogs (
+            asin_key TEXT PRIMARY KEY,
+            asin TEXT,
+            sku TEXT,
+            cogs REAL NOT NULL,
+            source_sheet TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS slack_daily_alerts (
+            alert_date TEXT PRIMARY KEY,
+            sent_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS app_settings (
             setting_key TEXT PRIMARY KEY,
             setting_value TEXT NOT NULL,
