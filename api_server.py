@@ -1605,7 +1605,7 @@ def product_top_movers(
         """
         SELECT
           t.sku,
-          COALESCE(m.tag, t.sku) AS tag,
+          MIN(COALESCE(m.tag, t.sku)) AS tag,
           COALESCE(SUM(t.sales_o_to_y),0) AS sales,
           COALESCE(SUM(t.quantity),0) AS units
         FROM transactions t
