@@ -1,68 +1,74 @@
-# Backend (Phase B-ready)
+# IQBAR Backend (FastAPI)
+
+This service is the only data access layer for the dashboard.
+
+- Frontend (Vercel) calls backend JSON APIs.
+- Backend handles auth, imports, processing, and DB reads/writes.
+- Database mode is configurable: `sqlite` (local) or `postgres` (Supabase).
 
 ## Local run
+
 ```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
+cd /Users/jakehonig/Documents/New\ project/backend
+source /Users/jakehonig/Documents/New\ project/.venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-## Render run command
+## Render start command
+
 ```bash
 uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
 
 ## Environment variables
-Copy `/Users/jakehonig/Documents/New project/backend/.env.example` to `.env` for local development.
 
-- `PORT` (default `8000`)
-- `BACKEND_CORS_ORIGINS` (default `*`)
-- `DB_BACKEND` (`sqlite` default, or `postgres`)
-- `SQLITE_PATH` (default `data/sales_dashboard.db`, used in sqlite mode)
-- `DATABASE_URL` (required in postgres mode)
-- `CLERK_ISSUER` (required in Phase C)
-- `CLERK_AUDIENCE` (optional)
-- `CLERK_SECRET_KEY` (optional, not required for JWT verification flow)
+Copy `/Users/jakehonig/Documents/New project/backend/.env.example` to `backend/.env` for local use.
 
-## Render deployment (backend)
-1. Create a new Web Service in Render from the GitHub repo.
-2. Root directory: `backend`
-3. Build command:
-   - `pip install -r requirements.txt`
-4. Start command:
-   - `uvicorn main:app --host 0.0.0.0 --port $PORT`
-5. Set env vars in Render:
-   - `BACKEND_CORS_ORIGINS=https://<your-vercel-app>.vercel.app`
-   - `DB_BACKEND=sqlite` (current production mode)
-   - `SQLITE_PATH=data/sales_dashboard.db`
-6. Verify:
-   - `GET /health` returns `{"ok": true}`
-   - `GET /dashboard?...` returns JSON
+- `BACKEND_CORS_ORIGINS`: allowed frontend origins (comma-separated)
+- `DB_BACKEND`: `sqlite` or `postgres`
+- `SQLITE_PATH`: local sqlite path if `DB_BACKEND=sqlite`
+- `DATABASE_URL`: Postgres URL if `DB_BACKEND=postgres`
+- `CLERK_ISSUER`: Clerk issuer URL
+- `CLERK_AUDIENCE`: optional audience
+- `CLERK_SECRET_KEY`: optional; useful for future Clerk admin APIs
+- `ADMIN_USER_IDS`: optional CSV of Clerk user IDs forced to admin
+- `ADMIN_EMAILS`: optional CSV of emails forced to admin
+- `SUPABASE_URL`: Supabase project URL (for Storage upload)
+- `SUPABASE_SERVICE_ROLE_KEY`: service role key (server-side only)
+- `SUPABASE_STORAGE_BUCKET`: raw file bucket name (default: `raw-uploads`)
+- `SUPABASE_STORAGE_PREFIX`: path prefix in bucket (default: `iqbar`)
+- `RAW_UPLOAD_DIR`: local fallback directory for raw files
+- `LOG_LEVEL`: logging level (`INFO` default)
+- `DASHBOARD_CACHE_TTL_SECONDS`: server cache TTL for `/dashboard` (default `30`)
 
-## Phase D migration commands (SQLite -> Postgres)
-1. Ensure `DATABASE_URL` is set in your shell or `backend/.env`.
-2. Apply schema + migrate data:
-   ```bash
-   cd /Users/jakehonig/Documents/New\ project
-   python3 backend/scripts/migrate_sqlite_to_postgres.py \
-     --sqlite data/sales_dashboard.db \
-     --database-url "$DATABASE_URL"
-   ```
-3. Switch runtime to postgres (local test):
-   - `DB_BACKEND=postgres`
-   - `DATABASE_URL=postgresql://...`
+## Health/readiness
 
-## Endpoints
-- `GET /health`
+- `GET /health` → process alive
+- `GET /ready` → DB connectivity status (`200` if DB ready, `503` if not)
+
+## Core endpoints
+
 - `GET /dashboard`
+- `GET /api/meta/date-range`
+- `GET /api/goals`
+- `POST /api/goals/upsert` (admin)
+- `GET /api/settings`
+- `POST /api/settings` (admin)
+- `GET /api/import/history`
+- `GET /api/import/date-coverage`
+- `POST /api/import/payments` (admin)
+- `DELETE /api/import/payments` (admin)
+- `POST /api/import/shopify-line` (admin)
+- `POST /api/import/inventory` (admin)
+- `POST /api/import/ntb` (admin)
+- `POST /api/import/cogs-fees` (admin)
 
-In Phase C, `/dashboard` requires a valid Clerk bearer token.
+## Phase D migration command (SQLite -> Postgres)
 
-`/dashboard` supports:
-- `channel`, `preset`, `start_date`, `end_date`
-- `compare_mode`, `granularity`, `product_line`, `product_tag`
-- `w7`, `w30`, `w60`, `w90`, `target_wos`
-- forecast assumption params (`recent_weight`, `mom_weight`, etc.)
-- `include_data` (for lightweight bootstrap)
+```bash
+cd /Users/jakehonig/Documents/New\ project
+python3 backend/scripts/migrate_sqlite_to_postgres.py \
+  --sqlite data/sales_dashboard.db \
+  --database-url "$DATABASE_URL"
+```

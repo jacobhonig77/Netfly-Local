@@ -3,9 +3,11 @@ from __future__ import annotations
 import calendar
 import io
 import math
+import mimetypes
 import os
 import re
 import sqlite3
+import logging
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -45,8 +47,13 @@ DB_PATH = Path(os.getenv("DB_PATH", "data/sales_dashboard.db"))
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 DB_BACKEND = os.getenv("DB_BACKEND", "sqlite").strip().lower()
 RAW_UPLOAD_DIR = Path(os.getenv("RAW_UPLOAD_DIR", "data/raw_uploads"))
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "raw-uploads").strip()
+SUPABASE_STORAGE_PREFIX = os.getenv("SUPABASE_STORAGE_PREFIX", "iqbar").strip().strip("/")
 ENV_PATH = Path(".env")
 POSTGRES_SCHEMA_PATH = Path(__file__).resolve().parent / "backend" / "sql" / "postgres_schema.sql"
+logger = logging.getLogger("iqbar.api_server")
 
 
 def load_local_env(path: Path = ENV_PATH) -> None:
@@ -429,15 +436,60 @@ def _safe_upload_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", base) or "upload.bin"
 
 
+def _raw_storage_mode() -> str:
+    if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY and SUPABASE_STORAGE_BUCKET:
+        return "supabase"
+    return "local"
+
+
+def _upload_raw_to_supabase(object_key: str, file_bytes: bytes, content_type: str) -> bool:
+    if _raw_storage_mode() != "supabase":
+        return False
+    url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}/{object_key.lstrip('/')}"
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "x-upsert": "true",
+        "content-type": content_type or "application/octet-stream",
+    }
+    try:
+        resp = requests.post(url, headers=headers, data=file_bytes, timeout=30)
+        if 200 <= resp.status_code < 300:
+            return True
+        logger.warning("supabase raw upload failed [%s]: %s", resp.status_code, resp.text[:300])
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("supabase raw upload error: %s", exc)
+        return False
+
+
 def persist_raw_upload(file_name: str, file_bytes: bytes, data_type: str, channel: str = "Amazon") -> str:
     ts = datetime.now().strftime("%Y%m%dT%H%M%S")
     ch = normalize_channel(channel).lower()
     safe_name = _safe_upload_name(file_name)
+    object_key = "/".join(
+        p for p in [SUPABASE_STORAGE_PREFIX, ch, data_type, f"{ts}_{safe_name}"] if p
+    )
+    content_type = mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+
+    if _upload_raw_to_supabase(object_key, file_bytes, content_type):
+        return f"supabase://{SUPABASE_STORAGE_BUCKET}/{object_key}"
+
     target_dir = RAW_UPLOAD_DIR / ch / data_type
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{ts}_{safe_name}"
     target_path.write_bytes(file_bytes)
     return str(target_path)
+
+
+def database_health_check() -> dict:
+    try:
+        conn = db_conn()
+        conn.execute("SELECT 1")
+        conn.close()
+        return {"ok": True, "db_backend": DB_BACKEND}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "db_backend": DB_BACKEND, "error": str(exc)}
 
 
 def normalize_product_line(line: Optional[str]) -> str:

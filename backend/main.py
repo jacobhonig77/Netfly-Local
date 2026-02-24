@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import time
@@ -12,6 +13,7 @@ from typing import Any, Callable, Optional, Tuple
 import jwt
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -61,6 +63,7 @@ else:
 
 from api_server import (  # noqa: E402
     business_monthly,
+    database_health_check,
     delete_import_payment,
     forecast_mtd,
     goals_get,
@@ -93,6 +96,12 @@ from api_server import (  # noqa: E402
     inventory_snapshot,
 )
 
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("iqbar.backend")
+
 app = FastAPI(title="IQBAR Dashboard Backend", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
@@ -103,6 +112,8 @@ app.add_middleware(
 )
 bearer_scheme = HTTPBearer(auto_error=True)
 _jwks_cache: dict[str, Any] = {"expires_at": 0, "keys": []}
+_dashboard_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+DASHBOARD_CACHE_TTL_SECONDS = max(0, int(os.getenv("DASHBOARD_CACHE_TTL_SECONDS", "30")))
 
 
 def ymd(value: date) -> str:
@@ -151,6 +162,31 @@ def _safe_call(
         return fallback
 
 
+def _cache_key(namespace: str, values: dict[str, Any]) -> str:
+    return f"{namespace}:{json.dumps(values, sort_keys=True, default=str)}"
+
+
+def _cache_get(key: str) -> Optional[dict[str, Any]]:
+    row = _dashboard_cache.get(key)
+    if not row:
+        return None
+    expires_at, payload = row
+    if time.time() >= expires_at:
+        _dashboard_cache.pop(key, None)
+        return None
+    return json.loads(json.dumps(payload, default=str))
+
+
+def _cache_set(key: str, payload: dict[str, Any]) -> None:
+    if DASHBOARD_CACHE_TTL_SECONDS <= 0:
+        return
+    _dashboard_cache[key] = (time.time() + DASHBOARD_CACHE_TTL_SECONDS, json.loads(json.dumps(payload, default=str)))
+
+
+def _clear_dashboard_cache() -> None:
+    _dashboard_cache.clear()
+
+
 def _get_jwks(issuer: str) -> list[dict[str, Any]]:
     now = int(time.time())
     if _jwks_cache["keys"] and now < int(_jwks_cache["expires_at"]):
@@ -166,15 +202,63 @@ def _get_jwks(issuer: str) -> list[dict[str, Any]]:
     return keys
 
 
+def _env_csv_set(name: str) -> set[str]:
+    raw = os.getenv(name, "")
+    return {part.strip().lower() for part in raw.split(",") if part.strip()}
+
+
+def _extract_claim_emails(claims: dict[str, Any]) -> set[str]:
+    emails: set[str] = set()
+    for key in ("email", "email_address", "primary_email_address"):
+        value = claims.get(key)
+        if isinstance(value, str) and value.strip():
+            emails.add(value.strip().lower())
+    email_addresses = claims.get("email_addresses")
+    if isinstance(email_addresses, list):
+        for item in email_addresses:
+            if isinstance(item, str) and item.strip():
+                emails.add(item.strip().lower())
+            elif isinstance(item, dict):
+                maybe_email = item.get("email_address") or item.get("email")
+                if isinstance(maybe_email, str) and maybe_email.strip():
+                    emails.add(maybe_email.strip().lower())
+    return emails
+
+
+def _normalize_role_value(value: Any) -> str:
+    norm = str(value or "").strip().lower()
+    if norm.startswith("org:"):
+        norm = norm.split(":", 1)[1]
+    if norm in {"admin", "owner", "super_admin", "superadmin"}:
+        return "admin"
+    return "viewer"
+
+
 def _extract_role(claims: dict[str, Any]) -> str:
-    role: Optional[str] = None
-    public_metadata = claims.get("public_metadata")
-    if isinstance(public_metadata, dict):
-        role = public_metadata.get("role") or public_metadata.get("Role")
-    if not role:
-        role = claims.get("role") or claims.get("org_role")
-    norm = str(role or "viewer").strip().lower()
-    return "admin" if norm == "admin" else "viewer"
+    user_id = str(claims.get("sub") or "").strip().lower()
+    admin_user_ids = _env_csv_set("ADMIN_USER_IDS")
+    if user_id and user_id in admin_user_ids:
+        return "admin"
+
+    admin_emails = _env_csv_set("ADMIN_EMAILS")
+    if admin_emails and _extract_claim_emails(claims).intersection(admin_emails):
+        return "admin"
+
+    role_candidates: list[Any] = [
+        claims.get("role"),
+        claims.get("org_role"),
+    ]
+
+    for md_key in ("public_metadata", "private_metadata", "unsafe_metadata"):
+        md = claims.get(md_key)
+        if isinstance(md, dict):
+            role_candidates.extend([md.get("role"), md.get("Role")])
+
+    for candidate in role_candidates:
+        if candidate:
+            return _normalize_role_value(candidate)
+
+    return "viewer"
 
 
 def verify_clerk_token(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)) -> dict[str, Any]:
@@ -223,6 +307,19 @@ def health() -> dict[str, bool]:
     return {"ok": True}
 
 
+@app.get("/ready")
+def ready() -> JSONResponse:
+    db_state = database_health_check()
+    code = status.HTTP_200_OK if db_state.get("ok") else status.HTTP_503_SERVICE_UNAVAILABLE
+    return JSONResponse(status_code=code, content=db_state)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request, exc: Exception):  # type: ignore[no-untyped-def]
+    logger.exception("unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": "Internal server error"})
+
+
 @app.get("/dashboard")
 def dashboard(
     channel: str = Query(default="Amazon"),
@@ -251,6 +348,39 @@ def dashboard(
     include_data: bool = Query(default=True),
     auth: dict[str, Any] = Depends(verify_clerk_token),
 ) -> dict[str, Any]:
+    cache_params = {
+        "channel": channel,
+        "preset": preset,
+        "start_date": start_date,
+        "end_date": end_date,
+        "compare_mode": compare_mode,
+        "granularity": granularity,
+        "product_line": product_line,
+        "product_tag": product_tag,
+        "w7": w7,
+        "w30": w30,
+        "w60": w60,
+        "w90": w90,
+        "target_wos": target_wos,
+        "recent_weight": recent_weight,
+        "mom_weight": mom_weight,
+        "weekday_strength": weekday_strength,
+        "manual_multiplier": manual_multiplier,
+        "promo_lift_pct": promo_lift_pct,
+        "content_lift_pct": content_lift_pct,
+        "instock_rate": instock_rate,
+        "growth_floor": growth_floor,
+        "growth_ceiling": growth_ceiling,
+        "volatility_multiplier": volatility_multiplier,
+        "include_data": include_data,
+        "role": auth.get("role", "viewer"),
+    }
+    cache_key = _cache_key("dashboard", cache_params)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        cached["auth"] = {"user_id": auth.get("user_id"), "role": auth.get("role", "viewer")}
+        return cached
+
     errors: dict[str, str] = {}
 
     meta = _safe_call("meta", errors, meta_date_range, channel, fallback={})
@@ -280,7 +410,7 @@ def dashboard(
     }
 
     if not include_data:
-        return {
+        payload = {
             "meta": meta,
             "channel": channel,
             "preset": preset,
@@ -289,6 +419,10 @@ def dashboard(
             "auth": {"user_id": auth.get("user_id"), "role": auth.get("role", "viewer")},
             "errors": errors,
         }
+        cacheable = dict(payload)
+        cacheable.pop("auth", None)
+        _cache_set(cache_key, cacheable)
+        return payload
 
     sales = {
         "summary": _safe_call("sales.summary", errors, sales_summary, compare_mode=compare_mode, **common, fallback=None),
@@ -360,7 +494,7 @@ def dashboard(
         "insights": _safe_call("inventory.insights", errors, inventory_insights, w7=w7, w30=w30, w60=w60, w90=w90, fallback={"kpis": {}, "insights": []}),
     }
 
-    return {
+    payload = {
         "meta": meta,
         "channel": channel,
         "preset": preset,
@@ -374,6 +508,10 @@ def dashboard(
         "auth": {"user_id": auth.get("user_id"), "role": auth.get("role", "viewer")},
         "errors": errors,
     }
+    cacheable = dict(payload)
+    cacheable.pop("auth", None)
+    _cache_set(cache_key, cacheable)
+    return payload
 
 
 @app.get("/api/meta/date-range")
@@ -405,7 +543,9 @@ def api_goals_upsert(
     auth: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     _ = auth
-    return goals_upsert(year=year, month=month, product_line=product_line, goal=goal, channel=channel)
+    out = goals_upsert(year=year, month=month, product_line=product_line, goal=goal, channel=channel)
+    _clear_dashboard_cache()
+    return out
 
 
 @app.get("/api/settings")
@@ -420,7 +560,9 @@ def api_settings_set(
     auth: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     _ = auth
-    return settings_set(auto_slack_on_import=auto_slack_on_import)
+    out = settings_set(auto_slack_on_import=auto_slack_on_import)
+    _clear_dashboard_cache()
+    return out
 
 
 @app.get("/api/import/history")
@@ -450,7 +592,9 @@ async def api_import_payments(
     auth: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     _ = auth
-    return await import_payments(files=files, channel=channel)
+    out = await import_payments(files=files, channel=channel)
+    _clear_dashboard_cache()
+    return out
 
 
 @app.delete("/api/import/payments")
@@ -460,7 +604,9 @@ def api_delete_import_payments(
     auth: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     _ = auth
-    return delete_import_payment(import_id=import_id, channel=channel)
+    out = delete_import_payment(import_id=import_id, channel=channel)
+    _clear_dashboard_cache()
+    return out
 
 
 @app.post("/api/import/shopify-line")
@@ -470,7 +616,9 @@ async def api_import_shopify_line(
     auth: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     _ = auth
-    return await import_shopify_line(product_line=product_line, files=files)
+    out = await import_shopify_line(product_line=product_line, files=files)
+    _clear_dashboard_cache()
+    return out
 
 
 @app.post("/api/import/inventory")
@@ -479,7 +627,9 @@ async def api_import_inventory(
     auth: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     _ = auth
-    return await import_inventory(files=files)
+    out = await import_inventory(files=files)
+    _clear_dashboard_cache()
+    return out
 
 
 @app.post("/api/import/ntb")
@@ -489,7 +639,9 @@ async def api_import_ntb(
     auth: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     _ = auth
-    return await import_ntb(files=files, channel=channel)
+    out = await import_ntb(files=files, channel=channel)
+    _clear_dashboard_cache()
+    return out
 
 
 @app.post("/api/import/cogs-fees")
@@ -498,7 +650,9 @@ async def api_import_cogs_fees(
     auth: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     _ = auth
-    return await import_cogs_fees(file=file)
+    out = await import_cogs_fees(file=file)
+    _clear_dashboard_cache()
+    return out
 
 
 @app.get("/api/inventory/history")
