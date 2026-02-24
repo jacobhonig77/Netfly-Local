@@ -1448,7 +1448,8 @@ export default function Page() {
       method: "POST",
       body: form,
     });
-    if (res.ok) {
+    const payload = await res.json().catch(() => ({}));
+    if (res.ok && payload?.ok !== false) {
       const history = await apiGet("/api/import/history", channelParams);
       setImportHistory(history.rows || []);
       const coverage = await apiGet("/api/import/date-coverage", { start_date: "2024-01-01", end_date: "2026-12-31", ...channelParams });
@@ -1456,7 +1457,7 @@ export default function Page() {
       await runFlowsByTrigger("on_import_payments");
       alert("Payments imported.");
     } else {
-      alert("Import failed.");
+      alert(payload?.error || "Import failed.");
     }
   }
 
@@ -1468,13 +1469,14 @@ export default function Page() {
       method: "POST",
       body: form,
     });
-    if (res.ok) {
+    const payload = await res.json().catch(() => ({}));
+    if (res.ok && payload?.ok !== false) {
       const invHist = await apiGet("/api/inventory/history");
       setInventoryHistory(invHist.rows || []);
       await runFlowsByTrigger("on_import_inventory");
       alert("Inventory imported.");
     } else {
-      alert("Inventory import failed.");
+      alert(payload?.error || "Inventory import failed.");
     }
   }
 
@@ -1486,13 +1488,14 @@ export default function Page() {
       method: "POST",
       body: form,
     });
-    if (res.ok) {
+    const payload = await res.json().catch(() => ({}));
+    if (res.ok && payload?.ok !== false) {
       const ntb = await apiGet("/api/ntb/monthly", channelParams);
       setNtbData(ntb || { rows: [], updated_from: null, updated_to: null, imported_at: null });
       await runFlowsByTrigger("on_import_ntb");
       alert("NTB imported.");
     } else {
-      alert("NTB import failed.");
+      alert(payload?.error || "NTB import failed.");
     }
   }
 

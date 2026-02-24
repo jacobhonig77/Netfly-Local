@@ -2382,10 +2382,13 @@ async def import_payments(files: list[UploadFile] = File(...), channel: str = "A
     duplicates_skipped = 0
     details = []
     for f in files:
-        raw = await f.read()
-        raw_path = persist_raw_upload(f.filename or "", raw, data_type="payments", channel=ch)
-        parsed = parse_payments_upload(f.filename, raw)
-        ins, dup = save_transactions(parsed, f.filename)
+        try:
+            raw = await f.read()
+            raw_path = persist_raw_upload(f.filename or "", raw, data_type="payments", channel=ch)
+            parsed = parse_payments_upload(f.filename, raw)
+            ins, dup = save_transactions(parsed, f.filename)
+        except Exception as exc:
+            return {"ok": False, "error": f"Payments import failed for {f.filename}: {exc}"}
         conn = db_conn()
         try:
             imported_meta = conn.execute(
