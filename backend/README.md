@@ -19,7 +19,9 @@ Copy `/Users/jakehonig/Documents/New project/backend/.env.example` to `.env` for
 
 - `PORT` (default `8000`)
 - `BACKEND_CORS_ORIGINS` (default `*`)
-- `SQLITE_PATH` (default `data/sales_dashboard.db`)
+- `DB_BACKEND` (`sqlite` default, or `postgres`)
+- `SQLITE_PATH` (default `data/sales_dashboard.db`, used in sqlite mode)
+- `DATABASE_URL` (required in postgres mode)
 - `CLERK_ISSUER` (required in Phase C)
 - `CLERK_AUDIENCE` (optional)
 - `CLERK_SECRET_KEY` (optional, not required for JWT verification flow)
@@ -33,10 +35,24 @@ Copy `/Users/jakehonig/Documents/New project/backend/.env.example` to `.env` for
    - `uvicorn main:app --host 0.0.0.0 --port $PORT`
 5. Set env vars in Render:
    - `BACKEND_CORS_ORIGINS=https://<your-vercel-app>.vercel.app`
-   - `SQLITE_PATH=data/sales_dashboard.db` (temporary for Phase B)
+   - `DB_BACKEND=sqlite` (current production mode)
+   - `SQLITE_PATH=data/sales_dashboard.db`
 6. Verify:
    - `GET /health` returns `{"ok": true}`
    - `GET /dashboard?...` returns JSON
+
+## Phase D migration commands (SQLite -> Postgres)
+1. Ensure `DATABASE_URL` is set in your shell or `backend/.env`.
+2. Apply schema + migrate data:
+   ```bash
+   cd /Users/jakehonig/Documents/New\ project
+   python3 backend/scripts/migrate_sqlite_to_postgres.py \
+     --sqlite data/sales_dashboard.db \
+     --database-url "$DATABASE_URL"
+   ```
+3. Switch runtime to postgres (local test):
+   - `DB_BACKEND=postgres`
+   - `DATABASE_URL=postgresql://...`
 
 ## Endpoints
 - `GET /health`

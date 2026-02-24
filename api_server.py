@@ -4,6 +4,7 @@ import calendar
 import io
 import math
 import os
+import re
 import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -14,6 +15,12 @@ import requests
 from fastapi import FastAPI, File, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except Exception:  # pragma: no cover - optional until postgres mode enabled
+    psycopg = None
+    dict_row = None
 
 try:
     from local_sales_dashboard import (
@@ -35,7 +42,10 @@ except Exception:
     save_transactions = None
 
 DB_PATH = Path(os.getenv("DB_PATH", "data/sales_dashboard.db"))
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+DB_BACKEND = os.getenv("DB_BACKEND", "sqlite").strip().lower()
 ENV_PATH = Path(".env")
+POSTGRES_SCHEMA_PATH = Path(__file__).resolve().parent / "backend" / "sql" / "postgres_schema.sql"
 
 
 def load_local_env(path: Path = ENV_PATH) -> None:
@@ -56,14 +66,112 @@ def load_local_env(path: Path = ENV_PATH) -> None:
 load_local_env()
 
 
-def db_conn() -> sqlite3.Connection:
+def _using_postgres() -> bool:
+    return DB_BACKEND == "postgres"
+
+
+class PostgresCursorAdapter:
+    def __init__(self, cursor, lastrowid: Optional[int] = None):
+        self._cursor = cursor
+        self.lastrowid = lastrowid
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    @property
+    def rowcount(self) -> int:
+        return int(self._cursor.rowcount or 0)
+
+
+class PostgresConnAdapter:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql: str, params: tuple = ()):
+        statement, bound = _adapt_params_for_postgres(sql, params)
+        cur = self._conn.cursor()
+        upper = statement.lstrip().upper()
+        lastrowid = None
+        if upper.startswith("INSERT INTO") and "RETURNING" not in upper and "ON CONFLICT" not in upper:
+            try:
+                cur.execute(f"{statement.rstrip().rstrip(';')} RETURNING id", bound)
+                row = cur.fetchone()
+                if row and isinstance(row, dict) and "id" in row:
+                    lastrowid = int(row["id"])
+                elif row and not isinstance(row, dict):
+                    lastrowid = int(row[0])
+                return PostgresCursorAdapter(cur, lastrowid=lastrowid)
+            except Exception:
+                cur.close()
+                cur = self._conn.cursor()
+        cur.execute(statement, bound)
+        return PostgresCursorAdapter(cur, lastrowid=lastrowid)
+
+    def executemany(self, sql: str, seq):
+        statement, _ = _adapt_params_for_postgres(sql, ())
+        cur = self._conn.cursor()
+        cur.executemany(statement, seq)
+        return PostgresCursorAdapter(cur)
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+
+def db_conn():
+    if DB_BACKEND == "postgres":
+        if not DATABASE_URL:
+            raise RuntimeError("DB_BACKEND=postgres but DATABASE_URL is empty")
+        if psycopg is None:
+            raise RuntimeError("psycopg is required for postgres mode")
+        return PostgresConnAdapter(psycopg.connect(DATABASE_URL, row_factory=dict_row))
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
+def _adapt_sql_for_postgres(sql: str) -> str:
+    out = sql
+    out = re.sub(r"strftime\\('%Y-%W',\\s*([^)]+)\\)", r"to_char((\\1)::date, 'IYYY-IW')", out)
+    out = re.sub(r"strftime\\('%m',\\s*([^)]+)\\)", r"to_char((\\1)::date, 'MM')", out)
+    out = re.sub(r"CAST\\(strftime\\('%w',\\s*([^)]+)\\) AS INTEGER\\)", r"CAST(EXTRACT(DOW FROM (\\1)::date) AS INTEGER)", out)
+    out = re.sub(r"date\\(([^,\\)]+),\\s*'-(\\d+) day'\\)", r"((\\1)::date - INTERVAL '\\2 day')::date", out)
+    return out
+
+
+def _adapt_params_for_postgres(sql: str, params: tuple) -> tuple[str, tuple]:
+    out = []
+    in_str = False
+    for ch in sql:
+        if ch == "'":
+            in_str = not in_str
+            out.append(ch)
+            continue
+        if ch == "?" and not in_str:
+            out.append("%s")
+        else:
+            out.append(ch)
+    return _adapt_sql_for_postgres("".join(out)), params
+
+
 def init_api_tables() -> None:
+    if _using_postgres():
+        conn = db_conn()
+        try:
+            schema_sql = POSTGRES_SCHEMA_PATH.read_text(encoding="utf-8")
+            for statement in [s.strip() for s in schema_sql.split(";") if s.strip()]:
+                conn.execute(statement)
+            conn.commit()
+        finally:
+            conn.close()
+        return
+
     # Ensure base dashboard tables exist even on a fresh/empty database
     # (Render free instances can start from a clean filesystem).
     if init_local_db is not None:
@@ -448,7 +556,23 @@ def save_shopify_line_daily(df: pd.DataFrame, source_file: str, product_line: st
     to_save["import_id"] = import_id
     to_save["product_line"] = line
     to_save = to_save[["import_id", "date", "product_line", "sales", "units", "orders"]]
-    to_save.to_sql("shopify_line_daily", conn, if_exists="append", index=False)
+    conn.executemany(
+        """
+        INSERT INTO shopify_line_daily (import_id, date, product_line, sales, units, orders)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                int(r["import_id"]),
+                str(r["date"]),
+                str(r["product_line"]),
+                float(r["sales"] or 0.0),
+                float(r["units"] or 0.0),
+                float(r["orders"] or 0.0),
+            )
+            for _, r in to_save.iterrows()
+        ],
+    )
     conn.commit()
     conn.close()
     return import_id, int(len(to_save))
@@ -473,7 +597,16 @@ def save_ntb_snapshot(df: pd.DataFrame, source_file: str, channel: str = "Amazon
     to_save["import_id"] = import_id
     to_save["month"] = pd.to_datetime(to_save["month"], errors="coerce").dt.strftime("%Y-%m-01")
     to_save = to_save[["import_id", "month", "product_line", "ntb_customers"]]
-    to_save.to_sql("ntb_monthly", conn, if_exists="append", index=False)
+    conn.executemany(
+        """
+        INSERT INTO ntb_monthly (import_id, month, product_line, ntb_customers)
+        VALUES (?, ?, ?, ?)
+        """,
+        [
+            (int(r["import_id"]), str(r["month"]), str(r["product_line"]), float(r["ntb_customers"] or 0.0))
+            for _, r in to_save.iterrows()
+        ],
+    )
     conn.commit()
     conn.close()
     return import_id, int(len(to_save))
@@ -482,6 +615,10 @@ def save_ntb_snapshot(df: pd.DataFrame, source_file: str, channel: str = "Amazon
 def read_df(sql: str, params: tuple = ()) -> pd.DataFrame:
     conn = db_conn()
     try:
+        if _using_postgres():
+            cur = conn.execute(sql, params)
+            rows = cur.fetchall() or []
+            return pd.DataFrame(rows)
         return pd.read_sql_query(sql, conn, params=params)
     finally:
         conn.close()
@@ -2271,7 +2408,7 @@ def ntb_monthly(channel: str = "Amazon") -> dict:
         "SELECT imported_at, min_month, max_month FROM ntb_imports WHERE id = ?",
         (latest_id,),
     ).fetchone()
-    rows = pd.read_sql_query(
+    rows = read_df(
         """
         SELECT
             month,
@@ -2283,8 +2420,7 @@ def ntb_monthly(channel: str = "Amazon") -> dict:
         GROUP BY month
         ORDER BY month
         """,
-        conn,
-        params=(latest_id,),
+        (latest_id,),
     )
     conn.close()
     if rows.empty:

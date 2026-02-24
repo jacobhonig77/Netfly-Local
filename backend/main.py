@@ -46,10 +46,18 @@ def _parse_cors_origins(raw: str) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 
 
-# Optional env override so backend data path is explicit for deploy targets.
-# If unset, legacy default in api_server remains data/sales_dashboard.db.
-if os.getenv("SQLITE_PATH"):
-    os.environ["DB_PATH"] = os.getenv("SQLITE_PATH", "")
+# Database runtime selection.
+# - sqlite (default): use SQLITE_PATH/DB_PATH
+# - postgres: use DATABASE_URL
+db_backend = os.getenv("DB_BACKEND", "sqlite").strip().lower()
+if db_backend == "postgres":
+    os.environ["DB_BACKEND"] = "postgres"
+    if os.getenv("DATABASE_URL"):
+        os.environ["DATABASE_URL"] = os.getenv("DATABASE_URL", "")
+else:
+    os.environ["DB_BACKEND"] = "sqlite"
+    if os.getenv("SQLITE_PATH"):
+        os.environ["DB_PATH"] = os.getenv("SQLITE_PATH", "")
 
 from api_server import (  # noqa: E402
     business_monthly,
