@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
 import jwt
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -61,10 +61,17 @@ else:
 
 from api_server import (  # noqa: E402
     business_monthly,
+    delete_import_payment,
     forecast_mtd,
     goals_get,
+    goals_upsert,
+    import_cogs_fees,
     import_date_coverage,
     import_history,
+    import_inventory,
+    import_ntb,
+    import_payments,
+    import_shopify_line,
     inventory_history,
     inventory_insights,
     inventory_latest,
@@ -76,9 +83,14 @@ from api_server import (  # noqa: E402
     product_top_movers,
     product_trend,
     sales_daily,
+    export_sales_pdf,
     sales_pivot,
     sales_summary,
     settings_get,
+    settings_set,
+    slack_send_summary,
+    product_sku_trend,
+    inventory_snapshot,
 )
 
 app = FastAPI(title="IQBAR Dashboard Backend", version="1.0.0")
@@ -198,6 +210,12 @@ def verify_clerk_token(credentials: HTTPAuthorizationCredentials = Depends(beare
         raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Unauthorized: {exc}") from exc
+
+
+def require_admin(auth: dict[str, Any] = Depends(verify_clerk_token)) -> dict[str, Any]:
+    if auth.get("role") != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
+    return auth
 
 
 @app.get("/health")
@@ -356,6 +374,194 @@ def dashboard(
         "auth": {"user_id": auth.get("user_id"), "role": auth.get("role", "viewer")},
         "errors": errors,
     }
+
+
+@app.get("/api/meta/date-range")
+def api_meta_date_range(
+    channel: str = Query(default="Amazon"),
+    auth: dict[str, Any] = Depends(verify_clerk_token),
+) -> dict[str, Any]:
+    _ = auth
+    return meta_date_range(channel=channel)
+
+
+@app.get("/api/goals")
+def api_goals_get(
+    channel: str = Query(default="Amazon"),
+    year: Optional[int] = Query(default=None),
+    auth: dict[str, Any] = Depends(verify_clerk_token),
+) -> dict[str, Any]:
+    _ = auth
+    return goals_get(channel=channel, year=year)
+
+
+@app.post("/api/goals/upsert")
+def api_goals_upsert(
+    year: int = Query(...),
+    month: int = Query(...),
+    product_line: str = Query(...),
+    goal: float = Query(...),
+    channel: str = Query(default="Amazon"),
+    auth: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ = auth
+    return goals_upsert(year=year, month=month, product_line=product_line, goal=goal, channel=channel)
+
+
+@app.get("/api/settings")
+def api_settings_get(auth: dict[str, Any] = Depends(verify_clerk_token)) -> dict[str, Any]:
+    _ = auth
+    return settings_get()
+
+
+@app.post("/api/settings")
+def api_settings_set(
+    auto_slack_on_import: bool = Query(default=True),
+    auth: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ = auth
+    return settings_set(auto_slack_on_import=auto_slack_on_import)
+
+
+@app.get("/api/import/history")
+def api_import_history(
+    channel: str = Query(default="Amazon"),
+    auth: dict[str, Any] = Depends(verify_clerk_token),
+) -> dict[str, Any]:
+    _ = auth
+    return import_history(channel=channel)
+
+
+@app.get("/api/import/date-coverage")
+def api_import_date_coverage(
+    start_date: str = Query(default="2024-01-01"),
+    end_date: Optional[str] = Query(default=None),
+    channel: str = Query(default="Amazon"),
+    auth: dict[str, Any] = Depends(verify_clerk_token),
+) -> dict[str, Any]:
+    _ = auth
+    return import_date_coverage(start_date=start_date, end_date=end_date, channel=channel)
+
+
+@app.post("/api/import/payments")
+async def api_import_payments(
+    files: list[UploadFile] = File(...),
+    channel: str = Query(default="Amazon"),
+    auth: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ = auth
+    return await import_payments(files=files, channel=channel)
+
+
+@app.delete("/api/import/payments")
+def api_delete_import_payments(
+    import_id: int = Query(..., gt=0),
+    channel: str = Query(default="Amazon"),
+    auth: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ = auth
+    return delete_import_payment(import_id=import_id, channel=channel)
+
+
+@app.post("/api/import/shopify-line")
+async def api_import_shopify_line(
+    product_line: str = Query(...),
+    files: list[UploadFile] = File(...),
+    auth: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ = auth
+    return await import_shopify_line(product_line=product_line, files=files)
+
+
+@app.post("/api/import/inventory")
+async def api_import_inventory(
+    files: list[UploadFile] = File(...),
+    auth: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ = auth
+    return await import_inventory(files=files)
+
+
+@app.post("/api/import/ntb")
+async def api_import_ntb(
+    files: list[UploadFile] = File(...),
+    channel: str = Query(default="Amazon"),
+    auth: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ = auth
+    return await import_ntb(files=files, channel=channel)
+
+
+@app.post("/api/import/cogs-fees")
+async def api_import_cogs_fees(
+    file: UploadFile = File(...),
+    auth: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ = auth
+    return await import_cogs_fees(file=file)
+
+
+@app.get("/api/inventory/history")
+def api_inventory_history(auth: dict[str, Any] = Depends(verify_clerk_token)) -> dict[str, Any]:
+    _ = auth
+    return inventory_history()
+
+
+@app.get("/api/inventory/snapshot")
+def api_inventory_snapshot(
+    snapshot_id: Optional[int] = Query(default=None),
+    w7: int = Query(default=40),
+    w30: int = Query(default=30),
+    w60: int = Query(default=20),
+    w90: int = Query(default=10),
+    target_wos: float = Query(default=8.0),
+    auth: dict[str, Any] = Depends(verify_clerk_token),
+) -> dict[str, Any]:
+    _ = auth
+    return inventory_snapshot(snapshot_id=snapshot_id, w7=w7, w30=w30, w60=w60, w90=w90, target_wos=target_wos)
+
+
+@app.get("/api/product/sku-trend")
+def api_product_sku_trend(
+    sku: str = Query(...),
+    start_date: Optional[str] = Query(default=None),
+    end_date: Optional[str] = Query(default=None),
+    metric: str = Query(default="sales"),
+    channel: str = Query(default="Amazon"),
+    auth: dict[str, Any] = Depends(verify_clerk_token),
+) -> dict[str, Any]:
+    _ = auth
+    return product_sku_trend(sku=sku, start_date=start_date, end_date=end_date, metric=metric, channel=channel)
+
+
+@app.get("/api/ntb/monthly")
+def api_ntb_monthly(
+    channel: str = Query(default="Amazon"),
+    auth: dict[str, Any] = Depends(verify_clerk_token),
+) -> dict[str, Any]:
+    _ = auth
+    return ntb_monthly(channel=channel)
+
+
+@app.get("/api/export/sales-pdf")
+def api_export_sales_pdf(
+    start_date: Optional[str] = Query(default=None),
+    end_date: Optional[str] = Query(default=None),
+    auth: dict[str, Any] = Depends(verify_clerk_token),
+):
+    _ = auth
+    return export_sales_pdf(start_date=start_date, end_date=end_date)
+
+
+@app.post("/api/slack/send-summary")
+def api_slack_send_summary(
+    start_date: Optional[str] = Query(default=None),
+    end_date: Optional[str] = Query(default=None),
+    channel: str = Query(default="Amazon"),
+    auth: dict[str, Any] = Depends(verify_clerk_token),
+) -> dict[str, Any]:
+    _ = auth
+    return slack_send_summary(start_date=start_date, end_date=end_date, channel=channel)
 
 
 if __name__ == "__main__":

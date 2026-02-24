@@ -44,6 +44,7 @@ except Exception:
 DB_PATH = Path(os.getenv("DB_PATH", "data/sales_dashboard.db"))
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 DB_BACKEND = os.getenv("DB_BACKEND", "sqlite").strip().lower()
+RAW_UPLOAD_DIR = Path(os.getenv("RAW_UPLOAD_DIR", "data/raw_uploads"))
 ENV_PATH = Path(".env")
 POSTGRES_SCHEMA_PATH = Path(__file__).resolve().parent / "backend" / "sql" / "postgres_schema.sql"
 
@@ -421,6 +422,22 @@ def normalize_channel(channel: Optional[str]) -> str:
     if c == "shopify":
         return "Shopify"
     return "Amazon"
+
+
+def _safe_upload_name(name: str) -> str:
+    base = Path(name or "upload.bin").name
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", base) or "upload.bin"
+
+
+def persist_raw_upload(file_name: str, file_bytes: bytes, data_type: str, channel: str = "Amazon") -> str:
+    ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+    ch = normalize_channel(channel).lower()
+    safe_name = _safe_upload_name(file_name)
+    target_dir = RAW_UPLOAD_DIR / ch / data_type
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / f"{ts}_{safe_name}"
+    target_path.write_bytes(file_bytes)
+    return str(target_path)
 
 
 def normalize_product_line(line: Optional[str]) -> str:
@@ -2314,6 +2331,7 @@ async def import_payments(files: list[UploadFile] = File(...), channel: str = "A
     details = []
     for f in files:
         raw = await f.read()
+        raw_path = persist_raw_upload(f.filename or "", raw, data_type="payments", channel=ch)
         parsed = parse_payments_upload(f.filename, raw)
         ins, dup = save_transactions(parsed, f.filename)
         conn = db_conn()
@@ -2345,7 +2363,7 @@ async def import_payments(files: list[UploadFile] = File(...), channel: str = "A
             conn.close()
         imported += int(ins)
         duplicates_skipped += int(dup)
-        details.append({"file": f.filename, "inserted": int(ins), "duplicates_skipped": int(dup)})
+        details.append({"file": f.filename, "inserted": int(ins), "duplicates_skipped": int(dup), "raw_path": raw_path})
     return {"ok": True, "channel": ch, "inserted": imported, "duplicates_skipped": duplicates_skipped, "details": details}
 
 
@@ -2361,6 +2379,7 @@ async def import_shopify_line(
     total_rows = 0
     for f in files:
         raw = await f.read()
+        raw_path = persist_raw_upload(f.filename or "", raw, data_type="shopify_line_daily", channel="Shopify")
         try:
             parsed = parse_shopify_sales_by_day_upload(f.filename or "", raw)
         except Exception as exc:
@@ -2371,7 +2390,7 @@ async def import_shopify_line(
                 "product_line": line,
             }
         import_id, row_count = save_shopify_line_daily(parsed, f.filename or "", line)
-        imports.append({"file": f.filename, "import_id": int(import_id), "rows": int(row_count), "product_line": line})
+        imports.append({"file": f.filename, "import_id": int(import_id), "rows": int(row_count), "product_line": line, "raw_path": raw_path})
         total_rows += int(row_count)
     return {"ok": True, "channel": "Shopify", "product_line": line, "rows": int(total_rows), "imports": imports}
 
@@ -2383,9 +2402,10 @@ async def import_inventory(files: list[UploadFile] = File(...)) -> dict:
     snapshots = []
     for f in files:
         raw = await f.read()
+        raw_path = persist_raw_upload(f.filename or "", raw, data_type="inventory", channel="Amazon")
         parsed = parse_inventory_upload(f.filename, raw)
         snap_id, row_count = save_inventory_snapshot(parsed, f.filename)
-        snapshots.append({"file": f.filename, "snapshot_id": int(snap_id), "rows": int(row_count)})
+        snapshots.append({"file": f.filename, "snapshot_id": int(snap_id), "rows": int(row_count), "raw_path": raw_path})
     return {"ok": True, "snapshots": snapshots}
 
 
@@ -2398,9 +2418,10 @@ async def import_ntb(files: list[UploadFile] = File(...), channel: str = "Amazon
     total_rows = 0
     for f in files:
         raw = await f.read()
+        raw_path = persist_raw_upload(f.filename or "", raw, data_type="ntb", channel=ch)
         parsed = parse_ntb_upload(f.filename, raw)
         import_id, row_count = save_ntb_snapshot(parsed, f.filename, channel=ch)
-        imports.append({"file": f.filename, "import_id": int(import_id), "rows": int(row_count)})
+        imports.append({"file": f.filename, "import_id": int(import_id), "rows": int(row_count), "raw_path": raw_path})
         total_rows += int(row_count)
     return {"ok": True, "channel": ch, "rows": int(total_rows), "imports": imports}
 
@@ -2410,11 +2431,12 @@ async def import_cogs_fees(file: UploadFile = File(...)) -> dict:
     if file is None:
         return {"ok": False, "error": "No file uploaded.", "rows": [], "row_count": 0}
     raw = await file.read()
+    raw_path = persist_raw_upload(file.filename or "", raw, data_type="cogs_fees", channel="Amazon")
     try:
         parsed = parse_cogs_fee_upload(file.filename or "", raw)
     except Exception as exc:
         return {"ok": False, "error": str(exc), "rows": [], "row_count": 0}
-    return {"ok": True, "rows": parsed.to_dict(orient="records"), "row_count": int(len(parsed))}
+    return {"ok": True, "rows": parsed.to_dict(orient="records"), "row_count": int(len(parsed)), "raw_path": raw_path}
 
 
 @app.get("/api/ntb/monthly")

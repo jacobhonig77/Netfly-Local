@@ -1439,7 +1439,7 @@ export default function Page() {
   async function onToggleAutoSlack(v) {
     setAutoSlack(v);
     await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/settings?auto_slack_on_import=${v ? "true" : "false"}`,
+      `${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/settings?auto_slack_on_import=${v ? "true" : "false"}`,
       { method: "POST" },
     );
   }
@@ -1448,7 +1448,7 @@ export default function Page() {
     if (!uploadFiles.length) return;
     const form = new FormData();
     for (const f of uploadFiles) form.append("files", f);
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/payments?channel=${encodeURIComponent(workspaceChannel)}`, {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/payments?channel=${encodeURIComponent(workspaceChannel)}`, {
       method: "POST",
       body: form,
     });
@@ -1468,7 +1468,7 @@ export default function Page() {
     if (!inventoryUploadFiles.length) return;
     const form = new FormData();
     for (const f of inventoryUploadFiles) form.append("files", f);
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/inventory`, {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/inventory`, {
       method: "POST",
       body: form,
     });
@@ -1486,7 +1486,7 @@ export default function Page() {
     if (!ntbUploadFiles.length) return;
     const form = new FormData();
     for (const f of ntbUploadFiles) form.append("files", f);
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/ntb?channel=${encodeURIComponent(workspaceChannel)}`, {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/ntb?channel=${encodeURIComponent(workspaceChannel)}`, {
       method: "POST",
       body: form,
     });
@@ -1504,7 +1504,7 @@ export default function Page() {
     if (!files?.length) return;
     const form = new FormData();
     for (const f of files) form.append("files", f);
-    const base = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+    const base = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
     const res = await fetch(`${base}/api/import/shopify-line?product_line=${encodeURIComponent(productLine)}`, {
       method: "POST",
       body: form,
@@ -1530,7 +1530,7 @@ export default function Page() {
     if (!row?.id) return;
     const msg = `Delete import ${row.source_file} (${row.imported_at})? This will remove those transactions from the dashboard.`;
     if (typeof window !== "undefined" && !window.confirm(msg)) return;
-    const base = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+    const base = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
     const res = await fetch(`${base}/api/import/payments?import_id=${encodeURIComponent(row.id)}&channel=${encodeURIComponent(workspaceChannel)}`, { method: "DELETE" });
     const payload = await res.json();
     if (!res.ok || !payload?.ok) {
@@ -1552,7 +1552,7 @@ export default function Page() {
     if (!cogsUploadFile) return;
     const form = new FormData();
     form.append("file", cogsUploadFile);
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/cogs-fees`, {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/cogs-fees`, {
       method: "POST",
       body: form,
     });
@@ -1576,7 +1576,7 @@ export default function Page() {
 
   async function onSendSlack(silent = false) {
     const res = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/slack/send-summary?start_date=${startDate}&end_date=${endDate}&channel=${encodeURIComponent(workspaceChannel)}`,
+      `${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/slack/send-summary?start_date=${startDate}&end_date=${endDate}&channel=${encodeURIComponent(workspaceChannel)}`,
       { method: "POST" },
     );
     const j = await res.json();
@@ -1655,7 +1655,7 @@ export default function Page() {
       goal: String(nextGoal),
       channel: String(row.channel || "Amazon"),
     });
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/goals/upsert?${qs.toString()}`, {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/goals/upsert?${qs.toString()}`, {
       method: "POST",
     });
     const payload = await res.json();
@@ -1925,7 +1925,7 @@ export default function Page() {
   }
 
   const commandActions = [
-    { id: "cmd-export", label: "Export current view as PDF", run: () => canExport && window.open(`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/export/sales-pdf?start_date=${startDate}&end_date=${endDate}`, "_blank") },
+    { id: "cmd-export", label: "Export current view as PDF", run: () => canExport && window.open(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/export/sales-pdf?start_date=${startDate}&end_date=${endDate}`, "_blank") },
     { id: "cmd-slack", label: "Send summary to Slack", run: () => canExport && onSendSlack() },
     { id: "cmd-data", label: "Go to Data & Import", run: () => setActiveTab("data") },
   ];
@@ -2059,7 +2059,7 @@ export default function Page() {
                 </div>
               )}
             </div>
-            <button className="btn btn-filter" disabled={!canExport} onClick={() => canExport && window.open(`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/export/sales-pdf?start_date=${startDate}&end_date=${endDate}`, "_blank")}>
+            <button className="btn btn-filter" disabled={!canExport} onClick={() => canExport && window.open(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/export/sales-pdf?start_date=${startDate}&end_date=${endDate}`, "_blank")}>
               Export PDF
             </button>
             <button className="btn btn-coral" disabled={!canExport} onClick={() => canExport && onSendSlack()}>Send to Slack</button>
@@ -2090,7 +2090,7 @@ export default function Page() {
                 {!canEdit && <p className="muted-note" style={{ marginTop: 6 }}>Only Admin can change import settings.</p>}
                 <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
                   <button className="btn btn-accent" disabled={!canExport} onClick={() => canExport && onSendSlack()}>Send Summary to Slack</button>
-                  <button className="btn" disabled={!canExport} onClick={() => canExport && window.open(`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/export/sales-pdf?start_date=${startDate}&end_date=${endDate}`, "_blank")}>Export PDF</button>
+                  <button className="btn" disabled={!canExport} onClick={() => canExport && window.open(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/export/sales-pdf?start_date=${startDate}&end_date=${endDate}`, "_blank")}>Export PDF</button>
                 </div>
               </section>
               <section className="panel">
@@ -2808,7 +2808,7 @@ export default function Page() {
                       disabled={!canExport}
                       onClick={() => {
                         if (!canExport) return;
-                        window.open(`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/export/sales-pdf?start_date=${startDate}&end_date=${endDate}`, "_blank");
+                        window.open(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/export/sales-pdf?start_date=${startDate}&end_date=${endDate}`, "_blank");
                         setReportHistory((rows) => [{
                           id: uid("rep"),
                           generatedAt: new Date().toISOString(),
