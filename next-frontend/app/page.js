@@ -1434,10 +1434,22 @@ export default function Page() {
 
   async function onToggleAutoSlack(v) {
     setAutoSlack(v);
-    await fetch(
+    await authFetch(
       `${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/settings?auto_slack_on_import=${v ? "true" : "false"}`,
       { method: "POST" },
     );
+  }
+
+  async function authFetch(url, init = {}) {
+    let token = "";
+    try {
+      token = (await getToken({ skipCache: true })) || "";
+    } catch {
+      token = "";
+    }
+    const headers = { ...(init.headers || {}) };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return fetch(url, { ...init, headers });
   }
 
   async function parseApiError(res, fallbackMessage) {
@@ -1457,7 +1469,7 @@ export default function Page() {
     if (!uploadFiles.length) return;
     const form = new FormData();
     for (const f of uploadFiles) form.append("files", f);
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/payments?channel=${encodeURIComponent(workspaceChannel)}`, {
+    const res = await authFetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/payments?channel=${encodeURIComponent(workspaceChannel)}`, {
       method: "POST",
       body: form,
     });
@@ -1484,7 +1496,7 @@ export default function Page() {
     if (!inventoryUploadFiles.length) return;
     const form = new FormData();
     for (const f of inventoryUploadFiles) form.append("files", f);
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/inventory`, {
+    const res = await authFetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/inventory`, {
       method: "POST",
       body: form,
     });
@@ -1509,7 +1521,7 @@ export default function Page() {
     if (!ntbUploadFiles.length) return;
     const form = new FormData();
     for (const f of ntbUploadFiles) form.append("files", f);
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/ntb?channel=${encodeURIComponent(workspaceChannel)}`, {
+    const res = await authFetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/ntb?channel=${encodeURIComponent(workspaceChannel)}`, {
       method: "POST",
       body: form,
     });
@@ -1535,7 +1547,7 @@ export default function Page() {
     const form = new FormData();
     for (const f of files) form.append("files", f);
     const base = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
-    const res = await fetch(`${base}/api/import/shopify-line?product_line=${encodeURIComponent(productLine)}`, {
+    const res = await authFetch(`${base}/api/import/shopify-line?product_line=${encodeURIComponent(productLine)}`, {
       method: "POST",
       body: form,
     });
@@ -1567,7 +1579,7 @@ export default function Page() {
     const msg = `Delete import ${row.source_file} (${row.imported_at})? This will remove those transactions from the dashboard.`;
     if (typeof window !== "undefined" && !window.confirm(msg)) return;
     const base = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
-    const res = await fetch(`${base}/api/import/payments?import_id=${encodeURIComponent(row.id)}&channel=${encodeURIComponent(workspaceChannel)}`, { method: "DELETE" });
+    const res = await authFetch(`${base}/api/import/payments?import_id=${encodeURIComponent(row.id)}&channel=${encodeURIComponent(workspaceChannel)}`, { method: "DELETE" });
     let payload = {};
     try {
       payload = await res.json();
@@ -1594,7 +1606,7 @@ export default function Page() {
     if (!cogsUploadFile) return;
     const form = new FormData();
     form.append("file", cogsUploadFile);
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/cogs-fees`, {
+    const res = await authFetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/cogs-fees`, {
       method: "POST",
       body: form,
     });
@@ -1623,7 +1635,7 @@ export default function Page() {
   }
 
   async function onSendSlack(silent = false) {
-    const res = await fetch(
+    const res = await authFetch(
       `${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/slack/send-summary?start_date=${startDate}&end_date=${endDate}&channel=${encodeURIComponent(workspaceChannel)}`,
       { method: "POST" },
     );
@@ -1703,7 +1715,7 @@ export default function Page() {
       goal: String(nextGoal),
       channel: String(row.channel || "Amazon"),
     });
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/goals/upsert?${qs.toString()}`, {
+    const res = await authFetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/goals/upsert?${qs.toString()}`, {
       method: "POST",
     });
     const payload = await res.json();
