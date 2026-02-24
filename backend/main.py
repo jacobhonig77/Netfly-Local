@@ -250,7 +250,7 @@ def dashboard(
             channel=channel,
             fallback={"rows": [], "updated_from": None, "updated_to": None, "imported_at": None},
         ),
-        "goals": _safe_call("workspace.goals", errors, goals_get, channel=channel, fallback={"rows": []}),
+        "goals": _safe_call("workspace.goals", errors, goals_get, channel=channel, year=None, fallback={"rows": []}),
     }
 
     if not include_data:
