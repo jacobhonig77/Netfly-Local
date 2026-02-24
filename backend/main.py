@@ -1,18 +1,42 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
+import time
+import urllib.request
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
-from fastapi import FastAPI, Query
+import jwt
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 os.chdir(ROOT_DIR)
+
+
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip().strip("\"").strip("'")
+        os.environ.setdefault(key, value)
+
+
+_load_env_file(Path(__file__).resolve().parent / ".env")
+_load_env_file(ROOT_DIR / ".env")
 
 
 def _parse_cors_origins(raw: str) -> list[str]:
@@ -57,6 +81,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+bearer_scheme = HTTPBearer(auto_error=True)
+_jwks_cache: dict[str, Any] = {"expires_at": 0, "keys": []}
 
 
 def ymd(value: date) -> str:
@@ -105,6 +131,67 @@ def _safe_call(
         return fallback
 
 
+def _get_jwks(issuer: str) -> list[dict[str, Any]]:
+    now = int(time.time())
+    if _jwks_cache["keys"] and now < int(_jwks_cache["expires_at"]):
+        return _jwks_cache["keys"]
+    url = f"{issuer.rstrip('/')}/.well-known/jwks.json"
+    with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310
+        payload = json.loads(resp.read().decode("utf-8"))
+    keys = payload.get("keys", [])
+    if not isinstance(keys, list) or not keys:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid JWKS response")
+    _jwks_cache["keys"] = keys
+    _jwks_cache["expires_at"] = now + 3600
+    return keys
+
+
+def _extract_role(claims: dict[str, Any]) -> str:
+    role: Optional[str] = None
+    public_metadata = claims.get("public_metadata")
+    if isinstance(public_metadata, dict):
+        role = public_metadata.get("role") or public_metadata.get("Role")
+    if not role:
+        role = claims.get("role") or claims.get("org_role")
+    norm = str(role or "viewer").strip().lower()
+    return "admin" if norm == "admin" else "viewer"
+
+
+def verify_clerk_token(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)) -> dict[str, Any]:
+    issuer = os.getenv("CLERK_ISSUER", "").strip()
+    audience = os.getenv("CLERK_AUDIENCE", "").strip()
+    if not issuer:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="CLERK_ISSUER is not configured")
+    token = credentials.credentials
+    try:
+        unverified_header = jwt.get_unverified_header(token)
+        kid = unverified_header.get("kid")
+        if not kid:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token kid")
+        key_data = next((k for k in _get_jwks(issuer) if k.get("kid") == kid), None)
+        if not key_data:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Signing key not found")
+        public_key = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(key_data))
+        options = {"verify_aud": bool(audience)}
+        claims = jwt.decode(
+            token,
+            key=public_key,
+            algorithms=["RS256"],
+            issuer=issuer,
+            audience=audience if audience else None,
+            options=options,
+        )
+        return {
+            "user_id": claims.get("sub"),
+            "role": _extract_role(claims),
+            "claims": claims,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Unauthorized: {exc}") from exc
+
+
 @app.get("/health")
 def health() -> dict[str, bool]:
     return {"ok": True}
@@ -136,6 +223,7 @@ def dashboard(
     growth_ceiling: float = Query(default=1.8),
     volatility_multiplier: float = Query(default=1.0),
     include_data: bool = Query(default=True),
+    auth: dict[str, Any] = Depends(verify_clerk_token),
 ) -> dict[str, Any]:
     errors: dict[str, str] = {}
 
@@ -172,6 +260,7 @@ def dashboard(
             "preset": preset,
             "resolved_dates": {"start_date": resolved_start, "end_date": resolved_end},
             "workspace": workspace,
+            "auth": {"user_id": auth.get("user_id"), "role": auth.get("role", "viewer")},
             "errors": errors,
         }
 
@@ -256,6 +345,7 @@ def dashboard(
         "forecast": forecast,
         "inventory": inventory,
         "workspace": workspace,
+        "auth": {"user_id": auth.get("user_id"), "role": auth.get("role", "viewer")},
         "errors": errors,
     }
 

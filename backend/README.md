@@ -20,6 +20,9 @@ Copy `/Users/jakehonig/Documents/New project/backend/.env.example` to `.env` for
 - `PORT` (default `8000`)
 - `BACKEND_CORS_ORIGINS` (default `*`)
 - `SQLITE_PATH` (default `data/sales_dashboard.db`)
+- `CLERK_ISSUER` (required in Phase C)
+- `CLERK_AUDIENCE` (optional)
+- `CLERK_SECRET_KEY` (optional, not required for JWT verification flow)
 
 ## Render deployment (backend)
 1. Create a new Web Service in Render from the GitHub repo.
@@ -38,6 +41,8 @@ Copy `/Users/jakehonig/Documents/New project/backend/.env.example` to `.env` for
 ## Endpoints
 - `GET /health`
 - `GET /dashboard`
+
+In Phase C, `/dashboard` requires a valid Clerk bearer token.
 
 `/dashboard` supports:
 - `channel`, `preset`, `start_date`, `end_date`

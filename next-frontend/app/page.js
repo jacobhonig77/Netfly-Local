@@ -14,7 +14,8 @@ import {
   Line,
   Legend,
 } from "recharts";
-import { apiGet } from "../lib/api";
+import { SignIn, useAuth } from "@clerk/nextjs";
+import { apiGet, setApiTokenProvider } from "../lib/api";
 import { fmtMoney, fmtPct, ymd } from "../lib/format";
 import KpiCard from "../components/KpiCard";
 
@@ -263,6 +264,8 @@ function calcCompareRangeJs(startDate, endDate, mode) {
 }
 
 export default function Page() {
+  const { isLoaded, isSignedIn, getToken } = useAuth();
+  const [tokenReady, setTokenReady] = useState(false);
   const [activeTab, setActiveTab] = useState("sales");
   const [workspaceChannel, setWorkspaceChannel] = useState("Amazon");
   const [theme, setTheme] = useState("light");
@@ -482,6 +485,7 @@ export default function Page() {
   }
 
   useEffect(() => {
+    if (!isLoaded || !isSignedIn || !tokenReady) return;
     apiGet("/dashboard", { ...channelParams, preset, include_data: false })
       .then((payload) => {
         const m = payload?.meta || null;
@@ -518,7 +522,7 @@ export default function Page() {
         setEndDate(ymd(today));
         setApiError(String(err?.message || err || "Failed to load dashboard bootstrap"));
       });
-  }, [channelParams, preset]);
+  }, [channelParams, preset, isLoaded, isSignedIn, tokenReady]);
 
   useEffect(() => {
     const stored = typeof window !== "undefined" ? window.localStorage.getItem("iq_theme") : null;
@@ -650,6 +654,7 @@ export default function Page() {
   }, [preset, meta]);
 
   useEffect(() => {
+    if (!isLoaded || !isSignedIn || !tokenReady) return;
     if (!startDate || !endDate) return;
     setLoading(true);
     setApiError("");
@@ -706,7 +711,18 @@ export default function Page() {
       })
       .catch((err) => setApiError(String(err?.message || err || "Unknown API error")))
       .finally(() => setLoading(false));
-  }, [startDate, endDate, compareMode, granularity, productTag, selectedInsightProductLine, w7, w30, w60, w90, targetWos, aRecentWeight, aMomWeight, aWeekdayStrength, aManualMultiplier, aPromoLift, aContentLift, aInstockRate, aGrowthFloor, aGrowthCeiling, aVolatility, channelParams, workspaceChannel]);
+  }, [startDate, endDate, compareMode, granularity, productTag, selectedInsightProductLine, w7, w30, w60, w90, targetWos, aRecentWeight, aMomWeight, aWeekdayStrength, aManualMultiplier, aPromoLift, aContentLift, aInstockRate, aGrowthFloor, aGrowthCeiling, aVolatility, channelParams, workspaceChannel, isLoaded, isSignedIn, tokenReady]);
+
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) {
+      setApiTokenProvider(null);
+      setTokenReady(false);
+      return;
+    }
+    setApiTokenProvider(() => getToken());
+    setTokenReady(true);
+    return () => setApiTokenProvider(null);
+  }, [isLoaded, isSignedIn, getToken]);
 
   useEffect(() => {
     if (!historySnapshotId) return;
@@ -1917,6 +1933,30 @@ export default function Page() {
   const commandItems = [...commandNavItems, ...commandActions].filter((item) =>
     item.label.toLowerCase().includes(commandQuery.toLowerCase()),
   );
+
+  if (!isLoaded) {
+    return (
+      <main className="app-shell">
+        <section className="main-panel" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+          <div className="panel"><h3>Loading...</h3></div>
+        </section>
+      </main>
+    );
+  }
+
+  if (!isSignedIn) {
+    return (
+      <main className="app-shell">
+        <section className="main-panel" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+          <div className="panel" style={{ maxWidth: 480, width: "100%" }}>
+            <h3 style={{ marginBottom: 12 }}>Sign In Required</h3>
+            <p className="muted-note" style={{ marginBottom: 18 }}>This dashboard is invite-only. Sign in with your team account.</p>
+            <SignIn routing="hash" />
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className={`shell shell-side ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
