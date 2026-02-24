@@ -85,6 +85,10 @@ class PostgresCursorAdapter:
     def rowcount(self) -> int:
         return int(self._cursor.rowcount or 0)
 
+    @property
+    def description(self):
+        return self._cursor.description
+
 
 class PostgresConnAdapter:
     def __init__(self, conn):
@@ -92,7 +96,7 @@ class PostgresConnAdapter:
 
     def execute(self, sql: str, params: tuple = ()):
         statement, bound = _adapt_params_for_postgres(sql, params)
-        cur = self._conn.cursor()
+        cur = self._conn.cursor(row_factory=dict_row)
         upper = statement.lstrip().upper()
         lastrowid = None
         if upper.startswith("INSERT INTO") and "RETURNING" not in upper and "ON CONFLICT" not in upper:
@@ -106,13 +110,13 @@ class PostgresConnAdapter:
                 return PostgresCursorAdapter(cur, lastrowid=lastrowid)
             except Exception:
                 cur.close()
-                cur = self._conn.cursor()
+                cur = self._conn.cursor(row_factory=dict_row)
         cur.execute(statement, bound)
         return PostgresCursorAdapter(cur, lastrowid=lastrowid)
 
     def executemany(self, sql: str, seq):
         statement, _ = _adapt_params_for_postgres(sql, ())
-        cur = self._conn.cursor()
+        cur = self._conn.cursor(row_factory=dict_row)
         cur.executemany(statement, seq)
         return PostgresCursorAdapter(cur)
 
@@ -618,7 +622,19 @@ def read_df(sql: str, params: tuple = ()) -> pd.DataFrame:
         if _using_postgres():
             cur = conn.execute(sql, params)
             rows = cur.fetchall() or []
-            return pd.DataFrame(rows)
+            cols = []
+            if cur.description:
+                cols = [str(d[0]) for d in cur.description if d and d[0]]
+            if rows:
+                first = rows[0]
+                if isinstance(first, dict):
+                    if cols:
+                        return pd.DataFrame(rows, columns=cols)
+                    return pd.DataFrame(rows)
+                if cols:
+                    return pd.DataFrame(rows, columns=cols)
+                return pd.DataFrame(rows)
+            return pd.DataFrame(columns=cols)
         return pd.read_sql_query(sql, conn, params=params)
     finally:
         conn.close()
