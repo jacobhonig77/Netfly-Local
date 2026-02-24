@@ -792,7 +792,7 @@ def health() -> dict:
 
 
 @app.get("/api/meta/date-range")
-def meta_date_range(channel: str = Query(default="Amazon")) -> dict:
+def meta_date_range(channel: str = "Amazon") -> dict:
     ch = normalize_channel(channel)
     if ch == "Shopify":
         conn = db_conn()
@@ -813,10 +813,10 @@ def meta_date_range(channel: str = Query(default="Amazon")) -> dict:
 
 @app.get("/api/sales/summary")
 def sales_summary(
-    start_date: Optional[str] = Query(default=None),
-    end_date: Optional[str] = Query(default=None),
-    compare_mode: str = Query(default="previous_period"),
-    channel: str = Query(default="Amazon"),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    compare_mode: str = "previous_period",
+    channel: str = "Amazon",
 ) -> dict:
     ch = normalize_channel(channel)
     start, end = clamp_dates(start_date, end_date, ch)
@@ -980,9 +980,9 @@ def sales_summary(
 
 @app.get("/api/sales/daily")
 def sales_daily(
-    start_date: Optional[str] = Query(default=None),
-    end_date: Optional[str] = Query(default=None),
-    channel: str = Query(default="Amazon"),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    channel: str = "Amazon",
 ) -> dict:
     ch = normalize_channel(channel)
     start, end = clamp_dates(start_date, end_date, ch)
@@ -1025,9 +1025,9 @@ def sales_daily(
 
 @app.get("/api/sales/pivot")
 def sales_pivot(
-    start_date: Optional[str] = Query(default=None),
-    end_date: Optional[str] = Query(default=None),
-    channel: str = Query(default="Amazon"),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    channel: str = "Amazon",
 ) -> dict:
     ch = normalize_channel(channel)
     start, end = clamp_dates(start_date, end_date, ch)
@@ -1073,7 +1073,7 @@ def sales_pivot(
 
 
 @app.get("/api/pnl/summary")
-def pnl_summary(start_date: Optional[str] = Query(default=None), end_date: Optional[str] = Query(default=None)) -> dict:
+def pnl_summary(start_date: Optional[str] = None, end_date: Optional[str] = None) -> dict:
     start, end = clamp_dates(start_date, end_date)
     cstart, cend = compare_window(start, end, "previous_period")
     row = read_df(
@@ -1173,9 +1173,9 @@ def pnl_summary(start_date: Optional[str] = Query(default=None), end_date: Optio
 
 @app.get("/api/product/summary")
 def product_summary(
-    start_date: Optional[str] = Query(default=None),
-    end_date: Optional[str] = Query(default=None),
-    channel: str = Query(default="Amazon"),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    channel: str = "Amazon",
 ) -> dict:
     ch = normalize_channel(channel)
     start, end = clamp_dates(start_date, end_date, ch)
@@ -1218,10 +1218,10 @@ def product_summary(
 
 @app.get("/api/product/trend")
 def product_trend(
-    start_date: Optional[str] = Query(default=None),
-    end_date: Optional[str] = Query(default=None),
-    granularity: str = Query(default="day"),
-    channel: str = Query(default="Amazon"),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    granularity: str = "day",
+    channel: str = "Amazon",
 ) -> dict:
     ch = normalize_channel(channel)
     start, end = clamp_dates(start_date, end_date, ch)
@@ -1277,11 +1277,11 @@ def product_trend(
 
 @app.get("/api/product/sku-summary")
 def product_sku_summary(
-    start_date: Optional[str] = Query(default=None),
-    end_date: Optional[str] = Query(default=None),
-    product_line: str = Query(default="IQBAR"),
-    product_tag: Optional[str] = Query(default=None),
-    channel: str = Query(default="Amazon"),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    product_line: str = "IQBAR",
+    product_tag: Optional[str] = None,
+    channel: str = "Amazon",
 ) -> dict:
     ch = normalize_channel(channel)
     start, end = clamp_dates(start_date, end_date, ch)
@@ -1375,11 +1375,11 @@ def product_sku_trend(
 
 @app.get("/api/product/top-movers")
 def product_top_movers(
-    start_date: Optional[str] = Query(default=None),
-    end_date: Optional[str] = Query(default=None),
-    product_line: str = Query(default="IQBAR"),
-    product_tag: Optional[str] = Query(default=None),
-    channel: str = Query(default="Amazon"),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    product_line: str = "IQBAR",
+    product_tag: Optional[str] = None,
+    channel: str = "Amazon",
 ) -> dict:
     ch = normalize_channel(channel)
     start, end = clamp_dates(start_date, end_date, ch)
@@ -1475,7 +1475,7 @@ def product_top_movers(
 
 
 @app.get("/api/business/monthly")
-def business_monthly(channel: str = Query(default="Amazon")) -> dict:
+def business_monthly(channel: str = "Amazon") -> dict:
     ch = normalize_channel(channel)
     if ch == "Shopify":
         rows = read_df(
@@ -1565,18 +1565,18 @@ def business_monthly(channel: str = Query(default="Amazon")) -> dict:
 
 @app.get("/api/forecast/mtd")
 def forecast_mtd(
-    as_of_date: Optional[str] = Query(default=None),
-    recent_weight: float = Query(default=0.6),
-    mom_weight: float = Query(default=0.4),
-    weekday_strength: float = Query(default=1.0),
-    manual_multiplier: float = Query(default=1.0),
-    promo_lift_pct: float = Query(default=0.0),
-    content_lift_pct: float = Query(default=0.0),
-    instock_rate: float = Query(default=1.0),
-    growth_floor: float = Query(default=0.5),
-    growth_ceiling: float = Query(default=1.8),
-    volatility_multiplier: float = Query(default=1.0),
-    channel: str = Query(default="Amazon"),
+    as_of_date: Optional[str] = None,
+    recent_weight: float = 0.6,
+    mom_weight: float = 0.4,
+    weekday_strength: float = 1.0,
+    manual_multiplier: float = 1.0,
+    promo_lift_pct: float = 0.0,
+    content_lift_pct: float = 0.0,
+    instock_rate: float = 1.0,
+    growth_floor: float = 0.5,
+    growth_ceiling: float = 1.8,
+    volatility_multiplier: float = 1.0,
+    channel: str = "Amazon",
 ) -> dict:
     ch = normalize_channel(channel)
     if ch == "Shopify":
@@ -1675,7 +1675,7 @@ def seasonality_month_weekday() -> dict:
 
 
 @app.get("/api/seasonality/calendar")
-def seasonality_calendar(year: int = Query(default=date.today().year)) -> dict:
+def seasonality_calendar(year: int = date.today().year) -> dict:
     rows = read_df(
         """
         SELECT
@@ -1948,7 +1948,7 @@ def settings_set(auto_slack_on_import: bool = Query(default=True)) -> dict:
 
 
 @app.get("/api/goals")
-def goals_get(channel: str = Query(default="Amazon"), year: Optional[int] = Query(default=None)) -> dict:
+def goals_get(channel: str = "Amazon", year: Optional[int] = None) -> dict:
     params: list[object] = [channel]
     where = "LOWER(channel) = LOWER(?)"
     if year is not None:
@@ -2017,7 +2017,7 @@ def goals_upsert(
 
 
 @app.get("/api/import/history")
-def import_history(channel: str = Query(default="Amazon")) -> dict:
+def import_history(channel: str = "Amazon") -> dict:
     ch = normalize_channel(channel)
     if ch == "Shopify":
         rows = read_df(
@@ -2095,9 +2095,9 @@ def delete_import_payment(import_id: int = Query(..., gt=0), channel: str = Quer
 
 @app.get("/api/import/date-coverage")
 def import_date_coverage(
-    start_date: str = Query(default="2024-01-01"),
-    end_date: Optional[str] = Query(default=None),
-    channel: str = Query(default="Amazon"),
+    start_date: str = "2024-01-01",
+    end_date: Optional[str] = None,
+    channel: str = "Amazon",
 ) -> dict:
     ch = normalize_channel(channel)
     end = parse_iso(end_date) if end_date else date.today()
@@ -2123,7 +2123,7 @@ def import_date_coverage(
 
 
 @app.post("/api/import/payments")
-async def import_payments(files: list[UploadFile] = File(...), channel: str = Query(default="Amazon")) -> dict:
+async def import_payments(files: list[UploadFile] = File(...), channel: str = "Amazon") -> dict:
     if parse_payments_upload is None or save_transactions is None:
         return {"ok": False, "error": "Payments parser not available in API runtime."}
     ch = normalize_channel(channel)
@@ -2208,7 +2208,7 @@ async def import_inventory(files: list[UploadFile] = File(...)) -> dict:
 
 
 @app.post("/api/import/ntb")
-async def import_ntb(files: list[UploadFile] = File(...), channel: str = Query(default="Amazon")) -> dict:
+async def import_ntb(files: list[UploadFile] = File(...), channel: str = "Amazon") -> dict:
     if not files:
         return {"ok": False, "error": "No files uploaded."}
     ch = normalize_channel(channel)
@@ -2236,7 +2236,7 @@ async def import_cogs_fees(file: UploadFile = File(...)) -> dict:
 
 
 @app.get("/api/ntb/monthly")
-def ntb_monthly(channel: str = Query(default="Amazon")) -> dict:
+def ntb_monthly(channel: str = "Amazon") -> dict:
     ch = normalize_channel(channel)
     conn = db_conn()
     latest = conn.execute(
