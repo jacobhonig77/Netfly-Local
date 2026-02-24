@@ -19,6 +19,7 @@ try:
     from local_sales_dashboard import (
         build_sales_pdf_report,
         get_logo_path,
+        init_db as init_local_db,
         parse_inventory_upload,
         parse_payments_upload,
         save_inventory_snapshot,
@@ -27,6 +28,7 @@ try:
 except Exception:
     build_sales_pdf_report = None
     get_logo_path = None
+    init_local_db = None
     parse_inventory_upload = None
     parse_payments_upload = None
     save_inventory_snapshot = None
@@ -55,13 +57,72 @@ load_local_env()
 
 
 def db_conn() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_api_tables() -> None:
+    # Ensure base dashboard tables exist even on a fresh/empty database
+    # (Render free instances can start from a clean filesystem).
+    if init_local_db is not None:
+        init_local_db()
+
     conn = db_conn()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            imported_at TEXT NOT NULL,
+            source_file TEXT NOT NULL,
+            date_time TEXT,
+            date TEXT,
+            type TEXT,
+            order_id TEXT,
+            order_state TEXT,
+            order_city TEXT,
+            order_postal TEXT,
+            sku TEXT,
+            description TEXT,
+            quantity REAL,
+            product_sales REAL,
+            product_sales_tax REAL,
+            shipping_credits REAL,
+            shipping_credits_tax REAL,
+            gift_wrap_credits REAL,
+            giftwrap_credits_tax REAL,
+            regulatory_fee REAL,
+            tax_on_regulatory_fee REAL,
+            promotional_rebates REAL,
+            promotional_rebates_tax REAL,
+            marketplace_withheld_tax REAL,
+            selling_fees REAL,
+            fba_fees REAL,
+            other_transaction_fees REAL,
+            other REAL,
+            total REAL,
+            transaction_status TEXT,
+            sales_o_to_y REAL,
+            tx_key TEXT,
+            channel TEXT DEFAULT 'Amazon'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS imports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            imported_at TEXT NOT NULL,
+            source_file TEXT NOT NULL,
+            row_count INTEGER NOT NULL,
+            min_date TEXT,
+            max_date TEXT,
+            total_sales_o_to_y REAL NOT NULL,
+            channel TEXT DEFAULT 'Amazon'
+        )
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS app_settings (
