@@ -10,6 +10,7 @@ import re
 import sqlite3
 import logging
 import smtplib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
@@ -1139,7 +1140,7 @@ def clamp_dates(start_date: Optional[str], end_date: Optional[str], channel: str
 
     conn = db_conn()
     row = conn.execute(
-        "SELECT MIN(date) AS min_date, MAX(date) AS max_date FROM transactions WHERE date IS NOT NULL AND COALESCE(channel,'Amazon') = ?",
+        "SELECT MIN(date) AS min_date, MAX(date) AS max_date FROM transactions WHERE date IS NOT NULL AND channel = ?",
         (ch,),
     ).fetchone()
     conn.close()
@@ -1498,19 +1499,32 @@ def dashboard(
     resolved_start, resolved_end = _resolve_date_window(meta or {}, preset, start_date, end_date)
     common = {"start_date": resolved_start, "end_date": resolved_end, "channel": channel}
 
-    workspace = {
-        "settings": _safe_call("workspace.settings", errors, settings_get, fallback={"auto_slack_on_import": True}),
-        "import_history": _safe_call("workspace.import_history", errors, import_history, channel=channel, fallback={"rows": []}),
-        "import_date_coverage": _safe_call(
-            "workspace.import_date_coverage", errors, import_date_coverage,
-            start_date="2024-01-01", end_date="2026-12-31", channel=channel, fallback={"rows": []},
-        ),
-        "ntb_monthly": _safe_call(
-            "workspace.ntb_monthly", errors, ntb_monthly, channel=channel,
-            fallback={"rows": [], "updated_from": None, "updated_to": None, "imported_at": None},
-        ),
-        "goals": _safe_call("workspace.goals", errors, goals_get, channel=channel, fallback={"rows": []}),
+    # Run workspace calls in parallel
+    workspace_tasks = {
+        "settings":             (settings_get, [], {}),
+        "import_history":       (import_history, [], {"channel": channel}),
+        "import_date_coverage": (import_date_coverage, [], {"start_date": "2024-01-01", "end_date": "2026-12-31", "channel": channel}),
+        "ntb_monthly":          (ntb_monthly, [], {"channel": channel}),
+        "goals":                (goals_get, [], {"channel": channel}),
     }
+    workspace_fallbacks = {
+        "settings": {"auto_slack_on_import": True},
+        "import_history": {"rows": []},
+        "import_date_coverage": {"rows": []},
+        "ntb_monthly": {"rows": [], "updated_from": None, "updated_to": None, "imported_at": None},
+        "goals": {"rows": []},
+    }
+    workspace_results: dict = {}
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        futs = {ex.submit(fn, *a, **kw): key for key, (fn, a, kw) in workspace_tasks.items()}
+        for fut in as_completed(futs):
+            key = futs[fut]
+            try:
+                workspace_results[key] = fut.result()
+            except Exception as exc:
+                errors[f"workspace.{key}"] = str(exc)
+                workspace_results[key] = workspace_fallbacks[key]
+    workspace = workspace_results
 
     if not include_data:
         return {
@@ -1522,63 +1536,61 @@ def dashboard(
             "errors": errors,
         }
 
-    sales = {
-        "summary": _safe_call("sales.summary", errors, sales_summary, compare_mode=compare_mode, **common, fallback=None),
-        "daily": _safe_call("sales.daily", errors, sales_daily, **common, fallback={"rows": []}),
-        "pivot": _safe_call("sales.pivot", errors, sales_pivot, **common, fallback={"rows": []}),
+    # Run all data calls in parallel
+    data_tasks = {
+        "sales.summary":              (sales_summary, [], {"compare_mode": compare_mode, **common}),
+        "sales.daily":                (sales_daily, [], {**common}),
+        "sales.pivot":                (sales_pivot, [], {**common}),
+        "product.summary":            (product_summary, [], {**common}),
+        "product.trend":              (product_trend, [], {"granularity": granularity, **common}),
+        "product.sku_summary":        (product_sku_summary, [], {"product_line": product_line, "product_tag": product_tag, **common}),
+        "product.sku_all.iqbar":      (product_sku_summary, [], {"product_line": "IQBAR", **common}),
+        "product.sku_all.iqmix":      (product_sku_summary, [], {"product_line": "IQMIX", **common}),
+        "product.sku_all.iqjoe":      (product_sku_summary, [], {"product_line": "IQJOE", **common}),
+        "product.top_movers":         (product_top_movers, [], {"product_line": product_line, "product_tag": product_tag, **common}),
+        "business.monthly":           (business_monthly, [], {"channel": channel}),
+        "business.pnl_summary":       (pnl_summary, [], {"start_date": resolved_start, "end_date": resolved_end}),
+        "forecast.mtd":               (forecast_mtd, [], {"as_of_date": resolved_end, "channel": channel, "recent_weight": recent_weight, "mom_weight": mom_weight, "weekday_strength": weekday_strength, "manual_multiplier": manual_multiplier, "promo_lift_pct": promo_lift_pct, "content_lift_pct": content_lift_pct, "instock_rate": instock_rate, "growth_floor": growth_floor, "growth_ceiling": growth_ceiling, "volatility_multiplier": volatility_multiplier}),
+        "inventory.latest":           (inventory_latest, [], {"w7": w7, "w30": w30, "w60": w60, "w90": w90, "target_wos": target_wos}),
+        "inventory.history":          (inventory_history, [], {}),
+        "inventory.insights":         (inventory_insights, [], {"w7": w7, "w30": w30, "w60": w60, "w90": w90}),
     }
-    product = {
-        "summary": _safe_call("product.summary", errors, product_summary, **common, fallback={"rows": []}),
-        "trend": _safe_call("product.trend", errors, product_trend, granularity=granularity, **common, fallback={"rows": []}),
-        "sku_summary": _safe_call(
-            "product.sku_summary", errors, product_sku_summary,
-            product_line=product_line, product_tag=product_tag, **common, fallback={"rows": []},
-        ),
-        "sku_summary_all": {
-            "iqbar": _safe_call("product.sku_summary_all.iqbar", errors, product_sku_summary, product_line="IQBAR", **common, fallback={"rows": []}),
-            "iqmix": _safe_call("product.sku_summary_all.iqmix", errors, product_sku_summary, product_line="IQMIX", **common, fallback={"rows": []}),
-            "iqjoe": _safe_call("product.sku_summary_all.iqjoe", errors, product_sku_summary, product_line="IQJOE", **common, fallback={"rows": []}),
-        },
-        "top_movers": _safe_call(
-            "product.top_movers", errors, product_top_movers,
-            product_line=product_line, product_tag=product_tag, **common, fallback={"gainers": [], "decliners": []},
-        ),
+    data_fallbacks = {
+        "sales.summary": None, "sales.daily": {"rows": []}, "sales.pivot": {"rows": []},
+        "product.summary": {"rows": []}, "product.trend": {"rows": []}, "product.sku_summary": {"rows": []},
+        "product.sku_all.iqbar": {"rows": []}, "product.sku_all.iqmix": {"rows": []}, "product.sku_all.iqjoe": {"rows": []},
+        "product.top_movers": {"gainers": [], "decliners": []},
+        "business.monthly": {"rows": [], "summary": {}}, "business.pnl_summary": None,
+        "forecast.mtd": {"projection": None},
+        "inventory.latest": {"snapshot": None, "rows": [], "by_line": {}},
+        "inventory.history": {"rows": []}, "inventory.insights": {"kpis": {}, "insights": []},
     }
-    business = {
-        "monthly": _safe_call("business.monthly", errors, business_monthly, channel=channel, fallback={"rows": [], "summary": {}}),
-        "pnl_summary": _safe_call("business.pnl_summary", errors, pnl_summary, start_date=resolved_start, end_date=resolved_end, fallback=None),
-    }
-    forecast = _safe_call(
-        "forecast.mtd", errors, forecast_mtd,
-        as_of_date=resolved_end, channel=channel,
-        recent_weight=recent_weight, mom_weight=mom_weight, weekday_strength=weekday_strength,
-        manual_multiplier=manual_multiplier, promo_lift_pct=promo_lift_pct, content_lift_pct=content_lift_pct,
-        instock_rate=instock_rate, growth_floor=growth_floor, growth_ceiling=growth_ceiling,
-        volatility_multiplier=volatility_multiplier, fallback={"projection": None},
-    )
-    inventory = {
-        "latest": _safe_call(
-            "inventory.latest", errors, inventory_latest,
-            w7=w7, w30=w30, w60=w60, w90=w90, target_wos=target_wos,
-            fallback={"snapshot": None, "rows": [], "by_line": {}},
-        ),
-        "history": _safe_call("inventory.history", errors, inventory_history, fallback={"rows": []}),
-        "insights": _safe_call(
-            "inventory.insights", errors, inventory_insights,
-            w7=w7, w30=w30, w60=w60, w90=w90, fallback={"kpis": {}, "insights": []},
-        ),
-    }
+    r: dict = {}
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        futs = {ex.submit(fn, *a, **kw): key for key, (fn, a, kw) in data_tasks.items()}
+        for fut in as_completed(futs):
+            key = futs[fut]
+            try:
+                r[key] = fut.result()
+            except Exception as exc:
+                errors[key] = str(exc)
+                r[key] = data_fallbacks[key]
 
     return {
         "meta": meta,
         "channel": channel,
         "preset": preset,
         "resolved_dates": {"start_date": resolved_start, "end_date": resolved_end},
-        "sales": sales,
-        "product": product,
-        "business": business,
-        "forecast": forecast,
-        "inventory": inventory,
+        "sales": {"summary": r["sales.summary"], "daily": r["sales.daily"], "pivot": r["sales.pivot"]},
+        "product": {
+            "summary": r["product.summary"], "trend": r["product.trend"],
+            "sku_summary": r["product.sku_summary"],
+            "sku_summary_all": {"iqbar": r["product.sku_all.iqbar"], "iqmix": r["product.sku_all.iqmix"], "iqjoe": r["product.sku_all.iqjoe"]},
+            "top_movers": r["product.top_movers"],
+        },
+        "business": {"monthly": r["business.monthly"], "pnl_summary": r["business.pnl_summary"]},
+        "forecast": r["forecast.mtd"],
+        "inventory": {"latest": r["inventory.latest"], "history": r["inventory.history"], "insights": r["inventory.insights"]},
         "workspace": workspace,
         "errors": errors,
     }
@@ -1602,7 +1614,7 @@ def meta_date_range(channel: str = "Amazon") -> dict:
 
     conn = db_conn()
     row = conn.execute(
-        "SELECT MIN(date) AS min_date, MAX(date) AS max_date, COUNT(*) AS tx_count FROM transactions WHERE date IS NOT NULL AND COALESCE(channel,'Amazon') = ?",
+        "SELECT MIN(date) AS min_date, MAX(date) AS max_date, COUNT(*) AS tx_count FROM transactions WHERE date IS NOT NULL AND channel = ?",
         (ch,),
     ).fetchone()
     conn.close()
@@ -1691,7 +1703,7 @@ def sales_summary(
         FROM transactions t
         LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
         WHERE t.date BETWEEN ? AND ?
-          AND COALESCE(t.channel,'Amazon') = ?
+          AND t.channel = ?
         """,
         (str(start), str(end), ch),
     ).fetchone()
@@ -1708,7 +1720,7 @@ def sales_summary(
             FROM transactions t
             LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
             WHERE t.date BETWEEN ? AND ?
-              AND COALESCE(t.channel,'Amazon') = ?
+              AND t.channel = ?
             """,
             (str(cstart), str(cend), ch),
         ).fetchone()
@@ -1734,7 +1746,7 @@ def sales_summary(
             FROM transactions t
             LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
             WHERE t.date BETWEEN ? AND ?
-              AND COALESCE(t.channel,'Amazon') = ?
+              AND t.channel = ?
             GROUP BY t.date
             ORDER BY t.date
             """,
@@ -1812,7 +1824,7 @@ def sales_daily(
         FROM transactions t
         LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
         WHERE t.date BETWEEN ? AND ?
-          AND COALESCE(t.channel,'Amazon') = ?
+          AND t.channel = ?
         GROUP BY t.date
         ORDER BY t.date
         """,
@@ -1860,7 +1872,7 @@ def sales_pivot(
         FROM transactions t
         LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
         WHERE t.date BETWEEN ? AND ?
-          AND COALESCE(t.channel,'Amazon') = ?
+          AND t.channel = ?
         GROUP BY t.date
         ORDER BY t.date
         """,
@@ -2004,7 +2016,7 @@ def product_summary(
         FROM transactions t
         LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
         WHERE t.date BETWEEN ? AND ?
-          AND COALESCE(t.channel,'Amazon') = ?
+          AND t.channel = ?
         GROUP BY 1
         ORDER BY sales DESC
         """,
@@ -2063,7 +2075,7 @@ def product_trend(
         FROM transactions t
         LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
         WHERE t.date BETWEEN ? AND ?
-          AND COALESCE(t.channel,'Amazon') = ?
+          AND t.channel = ?
         GROUP BY 1,2
         ORDER BY 1,2
         """,
@@ -2113,7 +2125,7 @@ def product_sku_summary(
         FROM transactions t
         LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
         WHERE t.date BETWEEN ? AND ?
-          AND COALESCE(t.channel,'Amazon') = ?
+          AND t.channel = ?
           AND COALESCE(m.product_line, 'Unmapped') = ?
           AND (
             COALESCE(CAST(? AS TEXT), '') = ''
@@ -2164,7 +2176,7 @@ def product_sku_trend(
           COALESCE(SUM(t.{metric_col}),0) AS value
         FROM transactions t
         WHERE t.date BETWEEN ? AND ?
-          AND COALESCE(t.channel,'Amazon') = ?
+          AND t.channel = ?
           AND UPPER(TRIM(COALESCE(t.sku,''))) = UPPER(TRIM(?))
         GROUP BY 1
         ORDER BY 1
@@ -2236,7 +2248,7 @@ def product_top_movers(
         FROM transactions t
         LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
         WHERE t.date BETWEEN ? AND ?
-          AND COALESCE(t.channel,'Amazon') = ?
+          AND t.channel = ?
           AND COALESCE(m.product_line, 'Unmapped') = ?
           AND (
             COALESCE(CAST(? AS TEXT), '') = ''
@@ -2255,7 +2267,7 @@ def product_top_movers(
         FROM transactions t
         LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
         WHERE t.date BETWEEN ? AND ?
-          AND COALESCE(t.channel,'Amazon') = ?
+          AND t.channel = ?
           AND COALESCE(m.product_line, 'Unmapped') = ?
           AND (
             COALESCE(CAST(? AS TEXT), '') = ''
@@ -2334,7 +2346,7 @@ def business_monthly(channel: str = "Amazon") -> dict:
         FROM transactions t
         LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
         WHERE date IS NOT NULL
-          AND COALESCE(t.channel,'Amazon') = ?
+          AND t.channel = ?
         GROUP BY 1
         ORDER BY 1
         """,
@@ -2346,7 +2358,7 @@ def business_monthly(channel: str = "Amazon") -> dict:
 
     max_month = str(rows["month"].max())
     max_dt = datetime.strptime(f"{max_month}-01", "%Y-%m-%d").date()
-    max_day = int(read_df("SELECT MAX(date) AS max_date FROM transactions WHERE COALESCE(channel,'Amazon') = ?", (ch,)).iloc[0]["max_date"][-2:])
+    max_day = int(read_df("SELECT MAX(date) AS max_date FROM transactions WHERE channel = ?", (ch,)).iloc[0]["max_date"][-2:])
     month_days = calendar.monthrange(max_dt.year, max_dt.month)[1]
     if max_day < month_days:
         rows = rows[rows["month"] != max_month].copy()
@@ -2389,7 +2401,7 @@ def forecast_mtd(
     if ch == "Shopify":
         max_date_row = read_df("SELECT MAX(date) AS max_date FROM shopify_line_daily WHERE date IS NOT NULL")
     else:
-        max_date_row = read_df("SELECT MAX(date) AS max_date FROM transactions WHERE date IS NOT NULL AND COALESCE(channel,'Amazon') = ?", (ch,))
+        max_date_row = read_df("SELECT MAX(date) AS max_date FROM transactions WHERE date IS NOT NULL AND channel = ?", (ch,))
     if max_date_row.empty or not str(max_date_row.iloc[0]["max_date"]):
         return {"projection": None}
     as_of = parse_iso(as_of_date) if as_of_date else parse_iso(str(max_date_row.iloc[0]["max_date"]))
@@ -2412,7 +2424,7 @@ def forecast_mtd(
             FROM transactions t
             LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
             WHERE t.date IS NOT NULL
-              AND COALESCE(t.channel,'Amazon') = ?
+              AND t.channel = ?
             GROUP BY t.date
             ORDER BY t.date
             """,
@@ -2841,9 +2853,9 @@ def import_history(channel: str = "Amazon") -> dict:
         return {"rows": rows.to_dict(orient="records")}
     rows = read_df(
         """
-        SELECT id, imported_at, source_file, row_count, min_date, max_date, total_sales_o_to_y, COALESCE(channel,'Amazon') AS channel
+        SELECT id, imported_at, source_file, row_count, min_date, max_date, total_sales_o_to_y, channel AS channel
         FROM imports
-        WHERE COALESCE(channel,'Amazon') = ?
+        WHERE channel = ?
         ORDER BY imported_at DESC
         """,
         (ch,),
@@ -2877,7 +2889,7 @@ def delete_import_payment(import_id: int = Query(..., gt=0), channel: str = Quer
             """
             SELECT id, imported_at, source_file
             FROM imports
-            WHERE id = ? AND COALESCE(channel,'Amazon') = ?
+            WHERE id = ? AND channel = ?
             """,
             (import_id, ch),
         ).fetchone()
@@ -2888,11 +2900,11 @@ def delete_import_payment(import_id: int = Query(..., gt=0), channel: str = Quer
             """
             DELETE FROM transactions
             WHERE imported_at = ? AND source_file = ?
-              AND COALESCE(channel,'Amazon') = ?
+              AND channel = ?
             """,
             (row["imported_at"], row["source_file"], ch),
         ).rowcount
-        deleted_imports = conn.execute("DELETE FROM imports WHERE id = ? AND COALESCE(channel,'Amazon') = ?", (import_id, ch)).rowcount
+        deleted_imports = conn.execute("DELETE FROM imports WHERE id = ? AND channel = ?", (import_id, ch)).rowcount
         conn.commit()
         return {
             "ok": True,
@@ -2920,7 +2932,7 @@ def import_date_coverage(
     else:
         tx_dates = set(
             read_df(
-                "SELECT DISTINCT date FROM transactions WHERE date IS NOT NULL AND COALESCE(channel,'Amazon') = ?",
+                "SELECT DISTINCT date FROM transactions WHERE date IS NOT NULL AND channel = ?",
                 (ch,),
             )["date"].astype(str).tolist()
         )
@@ -3028,7 +3040,7 @@ def ntb_monthly(channel: str = "Amazon") -> dict:
     ch = normalize_channel(channel)
     conn = db_conn()
     latest = conn.execute(
-        "SELECT MAX(id) AS latest_id FROM ntb_imports WHERE COALESCE(channel,'Amazon') = ?",
+        "SELECT MAX(id) AS latest_id FROM ntb_imports WHERE channel = ?",
         (ch,),
     ).fetchone()
     latest_id = int(latest["latest_id"]) if latest and latest["latest_id"] is not None else 0
