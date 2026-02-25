@@ -527,6 +527,14 @@ html, body {
   color: #596182;
 }
 
+.loading-progress-label {
+  margin: 14px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #334155;
+  letter-spacing: 0.02em;
+}
+
 .loading-track {
   width: min(700px, 88%);
   margin: 18px auto 0;
@@ -539,11 +547,11 @@ html, body {
 
 .loading-track span {
   display: block;
-  width: 38%;
+  width: 1%;
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, rgba(79, 70, 229, 0.25), rgba(79, 70, 229, 0.95), rgba(6, 182, 212, 0.8));
-  animation: trackSlide 1.4s ease-in-out infinite;
+  transition: width 220ms ease-out;
 }
 
 .loading-grid {

@@ -327,6 +327,7 @@ export default function Page() {
   const [skuChart, setSkuChart] = useState({ rows: [], loading: false });
   const [skuMetric, setSkuMetric] = useState("sales");
   const [apiError, setApiError] = useState("");
+  const [loadingProgress, setLoadingProgress] = useState(0);
   const [skuSummaryAll, setSkuSummaryAll] = useState([]);
   const [pnlSummary, setPnlSummary] = useState(null);
 
@@ -644,34 +645,50 @@ export default function Page() {
 
   useEffect(() => {
     if (!startDate || !endDate) return;
+    let isCancelled = false;
+    let progressTimer = null;
+    let hideTimer = null;
     setLoading(true);
+    setLoadingProgress(1);
     setApiError("");
-    apiGet("/dashboard", {
-      ...channelParams,
-      start_date: startDate,
-      end_date: endDate,
-      compare_mode: compareMode,
-      granularity,
-      product_line: selectedInsightProductLine,
-      product_tag: productTag || undefined,
-      w7,
-      w30,
-      w60,
-      w90,
-      target_wos: targetWos,
-      recent_weight: aRecentWeight,
-      mom_weight: aMomWeight,
-      weekday_strength: aWeekdayStrength,
-      manual_multiplier: aManualMultiplier,
-      promo_lift_pct: aPromoLift,
-      content_lift_pct: aContentLift,
-      instock_rate: aInstockRate,
-      growth_floor: aGrowthFloor,
-      growth_ceiling: aGrowthCeiling,
-      volatility_multiplier: aVolatility,
-      include_data: true,
-    }, { timeout_ms: 120000 })
-      .then((payload) => {
+    progressTimer = setInterval(() => {
+      if (isCancelled) return;
+      setLoadingProgress((p) => {
+        if (p >= 95) return p;
+        const step = Math.max(1, Math.ceil((100 - p) / 12));
+        return Math.min(95, p + step);
+      });
+    }, 280);
+
+    (async () => {
+      try {
+        const payload = await apiGet("/dashboard", {
+          ...channelParams,
+          start_date: startDate,
+          end_date: endDate,
+          compare_mode: compareMode,
+          granularity,
+          product_line: selectedInsightProductLine,
+          product_tag: productTag || undefined,
+          w7,
+          w30,
+          w60,
+          w90,
+          target_wos: targetWos,
+          recent_weight: aRecentWeight,
+          mom_weight: aMomWeight,
+          weekday_strength: aWeekdayStrength,
+          manual_multiplier: aManualMultiplier,
+          promo_lift_pct: aPromoLift,
+          content_lift_pct: aContentLift,
+          instock_rate: aInstockRate,
+          growth_floor: aGrowthFloor,
+          growth_ceiling: aGrowthCeiling,
+          volatility_multiplier: aVolatility,
+          include_data: true,
+        }, { timeout_ms: 120000 });
+        if (isCancelled) return;
+        setLoadingProgress(98);
         setSalesSummary(payload?.sales?.summary || null);
         setDaily(payload?.sales?.daily?.rows || []);
         setPivotRows(payload?.sales?.pivot?.rows || []);
@@ -696,9 +713,28 @@ export default function Page() {
         if (keys.length) {
           setApiError(`Some data failed to load: ${errors[keys[0]]}`);
         }
-      })
-      .catch((err) => setApiError(String(err?.message || err || "Unknown API error")))
-      .finally(() => setLoading(false));
+      } catch (err) {
+        if (!isCancelled) {
+          setApiError(String(err?.message || err || "Unknown API error"));
+        }
+      } finally {
+        if (progressTimer) clearInterval(progressTimer);
+        if (!isCancelled) {
+          setLoadingProgress(100);
+          hideTimer = setTimeout(() => {
+            if (isCancelled) return;
+            setLoading(false);
+            setLoadingProgress(0);
+          }, 180);
+        }
+      }
+    })();
+
+    return () => {
+      isCancelled = true;
+      if (progressTimer) clearInterval(progressTimer);
+      if (hideTimer) clearTimeout(hideTimer);
+    };
   }, [startDate, endDate, compareMode, granularity, productTag, selectedInsightProductLine, w7, w30, w60, w90, targetWos, aRecentWeight, aMomWeight, aWeekdayStrength, aManualMultiplier, aPromoLift, aContentLift, aInstockRate, aGrowthFloor, aGrowthCeiling, aVolatility, channelParams, workspaceChannel]);
 
 
@@ -1620,6 +1656,38 @@ export default function Page() {
     return Boolean(j?.ok);
   }
 
+  async function onSendEmail() {
+    const savedTo = typeof window !== "undefined" ? (window.localStorage.getItem("iq_summary_email_to") || "") : "";
+    const to = window.prompt("Send summary email to (comma-separated):", savedTo);
+    if (to == null) return false;
+    const recipients = String(to || "").trim();
+    if (!recipients) {
+      alert("No email recipients provided.");
+      return false;
+    }
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("iq_summary_email_to", recipients);
+    }
+    const qs = new URLSearchParams({
+      start_date: startDate,
+      end_date: endDate,
+      channel: workspaceChannel,
+      to: recipients,
+    });
+    const res = await authFetch(
+      `${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/email/send-summary?${qs.toString()}`,
+      { method: "POST" },
+    );
+    const j = await res.json();
+    if (!j?.ok) {
+      alert(j?.error || "Email send failed");
+      return false;
+    }
+    const sentTo = Array.isArray(j?.recipients) ? j.recipients.join(", ") : recipients;
+    alert(`Sent to email: ${sentTo}`);
+    return true;
+  }
+
   function openDateModal() {
     setDraftPreset(preset);
     setDraftCompareMode(compareMode);
@@ -2060,6 +2128,7 @@ export default function Page() {
             <button className="btn btn-filter" disabled={!canExport} onClick={() => canExport && window.open(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/export/sales-pdf?start_date=${startDate}&end_date=${endDate}`, "_blank")}>
               Export PDF
             </button>
+            <button className="btn btn-filter" disabled={!canExport} onClick={() => canExport && onSendEmail()}>Send to Email</button>
             <button className="btn btn-coral" disabled={!canExport} onClick={() => canExport && onSendSlack()}>Send to Slack</button>
           </div>
         </div>
@@ -2204,7 +2273,8 @@ export default function Page() {
               </div>
               <h2 className="loading-title">Syncing IQBAR Analytics</h2>
               <p className="loading-subtitle">Refreshing sales, inventory, and forecast models...</p>
-              <div className="loading-track"><span /></div>
+              <div className="loading-progress-label">{Math.max(1, Math.min(100, Math.round(loadingProgress || 0)))}%</div>
+              <div className="loading-track"><span style={{ width: `${Math.max(1, Math.min(100, loadingProgress || 0))}%` }} /></div>
               <div className="loading-grid">
                 <div className="loading-tile" />
                 <div className="loading-tile" />

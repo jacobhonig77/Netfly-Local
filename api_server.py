@@ -9,7 +9,9 @@ import os
 import re
 import sqlite3
 import logging
+import smtplib
 from datetime import date, datetime, timedelta
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
@@ -2562,8 +2564,12 @@ def _inventory_snapshot_payload(
         + (inv["units_60d"] / 60.0) * (w60 / weight_total)
         + (inv["units_90d"] / 90.0) * (w90 / weight_total)
     )
+    inv["effective_inventory"] = inv.apply(
+        lambda r: float(max(r["total_inventory"], r["available"] + r["inbound"])),
+        axis=1,
+    )
     inv["wos"] = inv.apply(
-        lambda r: float(max(r["total_inventory"], r["available"] + r["inbound"])) / (float(r["daily_demand"]) * 7.0)
+        lambda r: float(r["effective_inventory"]) / (float(r["daily_demand"]) * 7.0)
         if float(r["daily_demand"]) > 0
         else math.nan,
         axis=1,
@@ -2574,7 +2580,7 @@ def _inventory_snapshot_payload(
     )
 
     def status(r):
-        if float(r["available"]) <= 0:
+        if float(r["effective_inventory"]) <= 0:
             return "OOS"
         if pd.isna(r["wos"]):
             return "No Demand"
@@ -3142,10 +3148,126 @@ def slack_send_summary(
     return {"ok": True}
 
 
+@app.post("/api/email/send-summary")
+def email_send_summary(
+    start_date: Optional[str] = Query(default=None),
+    end_date: Optional[str] = Query(default=None),
+    channel: str = Query(default="Amazon"),
+    to: Optional[str] = Query(default=None),
+    subject: Optional[str] = Query(default=None),
+) -> dict:
+    ch = normalize_channel(channel)
+    start, end = clamp_dates(start_date, end_date, ch)
+    summary = sales_summary(start_date=str(start), end_date=str(end), compare_mode="mom", channel=ch)
+
+    smtp_host = os.getenv("SMTP_HOST", "").strip()
+    smtp_port = int(os.getenv("SMTP_PORT", "587").strip() or "587")
+    smtp_user = os.getenv("SMTP_USER", "").strip()
+    smtp_password = os.getenv("SMTP_PASSWORD", "").strip()
+    smtp_from = os.getenv("SMTP_FROM", "").strip() or smtp_user
+    smtp_use_ssl = _env_flag("SMTP_USE_SSL", default=False)
+    smtp_use_starttls = _env_flag("SMTP_USE_STARTTLS", default=not smtp_use_ssl)
+
+    default_recipients = os.getenv("SUMMARY_EMAIL_TO", "").strip()
+    recipient_raw = (to or default_recipients).strip()
+    recipients = [r.strip() for r in re.split(r"[;,]", recipient_raw) if r and r.strip()]
+
+    if not smtp_host:
+        return {"ok": False, "error": "SMTP_HOST not set"}
+    if not smtp_from:
+        return {"ok": False, "error": "SMTP_FROM not set (or SMTP_USER missing)"}
+    if not recipients:
+        return {"ok": False, "error": "No email recipients. Pass ?to=... or set SUMMARY_EMAIL_TO"}
+
+    linear = (summary.get("mtd") or {}).get("linear") or {}
+    dynamic = (summary.get("mtd") or {}).get("dynamic") or {}
+    linear_pace = linear.get("pace_to_goal")
+    dynamic_pace = dynamic.get("pace_to_goal")
+    linear_text = (
+        f"Proj ${float(linear.get('projected_total') or 0):,.2f} | Goal ${float(linear.get('goal') or 0):,.2f} | To Goal {linear_pace:.1%}"
+        if isinstance(linear_pace, (int, float))
+        else "n/a"
+    )
+    dynamic_text = (
+        f"Proj ${float(dynamic.get('projected_total') or 0):,.2f} | Goal ${float(dynamic.get('goal') or 0):,.2f} | To Goal {dynamic_pace:.1%}"
+        if isinstance(dynamic_pace, (int, float))
+        else "n/a"
+    )
+    cmp_start = (summary.get("compare_period") or {}).get("start_date")
+    cmp_end = (summary.get("compare_period") or {}).get("end_date")
+    compare_label = f"{cmp_start} to {cmp_end}" if cmp_start and cmp_end else "n/a"
+
+    deltas = summary.get("deltas") or {}
+    best_line = max(
+        [("IQBAR", deltas.get("iqbar")), ("IQMIX", deltas.get("iqmix")), ("IQJOE", deltas.get("iqjoe"))],
+        key=lambda x: (x[1] if isinstance(x[1], (int, float)) else float("-inf")),
+    )
+    worst_line = min(
+        [("IQBAR", deltas.get("iqbar")), ("IQMIX", deltas.get("iqmix")), ("IQJOE", deltas.get("iqjoe"))],
+        key=lambda x: (x[1] if isinstance(x[1], (int, float)) else float("inf")),
+    )
+    ai_line = (
+        f"MoM leader: {best_line[0]} ({fmt_pct(best_line[1])}); laggard: {worst_line[0]} ({fmt_pct(worst_line[1])}). "
+        f"Linear pace is {linear_pace:.1%} to goal."
+        if isinstance(linear_pace, (int, float))
+        else f"MoM leader: {best_line[0]} ({fmt_pct(best_line[1])}); laggard: {worst_line[0]} ({fmt_pct(worst_line[1])})."
+    )
+
+    period = summary.get("period") or {}
+    current = summary.get("current") or {}
+    body = "\n".join(
+        [
+            f"IQBAR {ch} Sales Summary",
+            "",
+            f"Period: {period.get('start_date', 'n/a')} to {period.get('end_date', 'n/a')}",
+            f"Compare: {compare_label}",
+            "",
+            f"Grand Total: ${float(current.get('grand_total') or 0):,.2f} ({fmt_pct(deltas.get('grand_total'))})",
+            f"IQBAR: ${float(current.get('iqbar') or 0):,.2f} ({fmt_pct(deltas.get('iqbar'))})",
+            f"IQMIX: ${float(current.get('iqmix') or 0):,.2f} ({fmt_pct(deltas.get('iqmix'))})",
+            f"IQJOE: ${float(current.get('iqjoe') or 0):,.2f} ({fmt_pct(deltas.get('iqjoe'))})",
+            "",
+            f"MTD Linear Pace: {linear_text}",
+            f"MTD Dynamic Pace: {dynamic_text}",
+            "",
+            f"AI Insight: {ai_line}",
+        ]
+    )
+
+    msg = EmailMessage()
+    msg["From"] = smtp_from
+    msg["To"] = ", ".join(recipients)
+    msg["Subject"] = (subject or f"IQBAR {ch} Sales Summary ({period.get('start_date', 'n/a')} to {period.get('end_date', 'n/a')})").strip()
+    msg.set_content(body)
+
+    try:
+        if smtp_use_ssl:
+            smtp = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20)
+        else:
+            smtp = smtplib.SMTP(smtp_host, smtp_port, timeout=20)
+        with smtp as server:
+            if smtp_use_starttls and not smtp_use_ssl:
+                server.starttls()
+            if smtp_user and smtp_password:
+                server.login(smtp_user, smtp_password)
+            server.send_message(msg)
+    except Exception as exc:
+        return {"ok": False, "error": f"Email send failed: {exc}"}
+
+    return {"ok": True, "recipients": recipients}
+
+
 def fmt_pct(v: Optional[float]) -> str:
     if v is None:
         return "n/a"
     return f"{v:+.1%}"
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 @app.get("/api/export/sales-pdf")
