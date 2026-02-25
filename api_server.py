@@ -449,6 +449,13 @@ def init_api_tables() -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shopify_line_daily_date ON shopify_line_daily(date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shopify_line_daily_line_date ON shopify_line_daily(product_line, date)")
+    # Performance indexes for SKU trend, inventory, and goal lookups
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_sku_date ON transactions(sku, date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_inventory_items_snapshot ON inventory_items(snapshot_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_inventory_items_sku ON inventory_items(asin)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_monthly_goals_lookup ON monthly_goals(channel, year, month, product_line)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sku_mapping_key ON sku_mapping(sku_key)")
     conn.commit()
     conn.close()
 

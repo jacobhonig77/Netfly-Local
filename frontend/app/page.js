@@ -262,11 +262,26 @@ function calcCompareRangeJs(startDate, endDate, mode) {
   return { start: ymd(cs), end: ymd(ce) };
 }
 
+function EmptyState({ icon = "📭", title, hint, action, onAction }) {
+  return (
+    <div className="empty-state">
+      <div className="empty-state-icon">{icon}</div>
+      <h4 className="empty-state-title">{title}</h4>
+      {hint && <p className="empty-state-hint">{hint}</p>}
+      {action && onAction && (
+        <button className="btn btn-sm" onClick={onAction}>{action}</button>
+      )}
+    </div>
+  );
+}
+
 export default function Page() {
   const [localUserName, setLocalUserName] = useState("Local User");
   const [activeTab, setActiveTab] = useState("sales");
   const [workspaceChannel, setWorkspaceChannel] = useState("Amazon");
   const sidebarCollapsed = false;
+  const [darkMode, setDarkMode] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [invSub, setInvSub] = useState("table");
@@ -327,6 +342,7 @@ export default function Page() {
   const [skuChart, setSkuChart] = useState({ rows: [], loading: false });
   const [skuMetric, setSkuMetric] = useState("sales");
   const [apiError, setApiError] = useState("");
+  const [retryCount, setRetryCount] = useState(0);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [skuSummaryAll, setSkuSummaryAll] = useState([]);
   const [pnlSummary, setPnlSummary] = useState(null);
@@ -468,18 +484,20 @@ export default function Page() {
     setFVolatility(Number(s.volatility_multiplier));
   }
 
+  function clamp(val, min, max) { return Math.min(max, Math.max(min, Number(val) || min)); }
+
   function applyForecastFactors() {
     setAppliedForecastScenario(forecastScenario);
-    setARecentWeight(fRecentWeight);
-    setAMomWeight(fMomWeight);
-    setAWeekdayStrength(fWeekdayStrength);
-    setAManualMultiplier(fManualMultiplier);
-    setAPromoLift(fPromoLift);
-    setAContentLift(fContentLift);
-    setAInstockRate(fInstockRate);
-    setAGrowthFloor(fGrowthFloor);
-    setAGrowthCeiling(fGrowthCeiling);
-    setAVolatility(fVolatility);
+    setARecentWeight(clamp(fRecentWeight, 0, 1));
+    setAMomWeight(clamp(fMomWeight, 0, 1));
+    setAWeekdayStrength(clamp(fWeekdayStrength, 0, 2));
+    setAManualMultiplier(clamp(fManualMultiplier, 0.1, 5));
+    setAPromoLift(clamp(fPromoLift, 0, 1));
+    setAContentLift(clamp(fContentLift, 0, 1));
+    setAInstockRate(clamp(fInstockRate, 0, 1));
+    setAGrowthFloor(clamp(fGrowthFloor, 0.1, 2.5));
+    setAGrowthCeiling(clamp(fGrowthCeiling, 0.2, 3.5));
+    setAVolatility(clamp(fVolatility, 0.5, 2.0));
   }
 
   useEffect(() => {
@@ -522,10 +540,18 @@ export default function Page() {
   }, [channelParams, preset]);
 
   useEffect(() => {
-    if (typeof document !== "undefined") {
-      document.documentElement.setAttribute("data-theme", "light");
+    if (typeof window !== "undefined") {
+      const saved = window.localStorage.getItem("iq_dark_mode");
+      if (saved === "1") setDarkMode(true);
     }
   }, []);
+
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
+      if (typeof window !== "undefined") window.localStorage.setItem("iq_dark_mode", darkMode ? "1" : "0");
+    }
+  }, [darkMode]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -735,7 +761,7 @@ export default function Page() {
       if (progressTimer) clearInterval(progressTimer);
       if (hideTimer) clearTimeout(hideTimer);
     };
-  }, [startDate, endDate, compareMode, granularity, productTag, selectedInsightProductLine, w7, w30, w60, w90, targetWos, aRecentWeight, aMomWeight, aWeekdayStrength, aManualMultiplier, aPromoLift, aContentLift, aInstockRate, aGrowthFloor, aGrowthCeiling, aVolatility, channelParams, workspaceChannel]);
+  }, [startDate, endDate, compareMode, granularity, productTag, selectedInsightProductLine, w7, w30, w60, w90, targetWos, aRecentWeight, aMomWeight, aWeekdayStrength, aManualMultiplier, aPromoLift, aContentLift, aInstockRate, aGrowthFloor, aGrowthCeiling, aVolatility, channelParams, workspaceChannel, retryCount]);
 
 
   useEffect(() => {
@@ -1478,6 +1504,13 @@ export default function Page() {
 
   async function onUploadPayments() {
     if (!uploadFiles.length) return;
+    const existingFiles = new Set((importHistory || []).map((r) => r.source_file));
+    const dupes = uploadFiles.filter((f) => existingFiles.has(f.name));
+    if (dupes.length) {
+      const names = dupes.map((f) => f.name).join(", ");
+      const ok = window.confirm(`"${names}" ${dupes.length > 1 ? "have" : "has"} already been imported. Upload again anyway?`);
+      if (!ok) return;
+    }
     const form = new FormData();
     for (const f of uploadFiles) form.append("files", f);
     const res = await authFetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/import/payments?channel=${encodeURIComponent(workspaceChannel)}`, {
@@ -2028,7 +2061,11 @@ export default function Page() {
 
   return (
     <main className={`shell shell-side ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      <aside className="sidebar-shell">
+      {mobileMenuOpen && <div className="mobile-overlay" onClick={() => setMobileMenuOpen(false)} />}
+      <button className="mobile-hamburger" onClick={() => setMobileMenuOpen((v) => !v)} aria-label="Toggle menu">
+        {mobileMenuOpen ? "✕" : "☰"}
+      </button>
+      <aside className={`sidebar-shell${mobileMenuOpen ? " mobile-open" : ""}`}>
         <div className="menu-rail">
           <div className="logo-wrap">
             {!sidebarCollapsed && (
@@ -2073,6 +2110,10 @@ export default function Page() {
             );
           })}
           <div className="sidebar-bottom">
+            <button className="sidebar-dark-toggle" onClick={() => setDarkMode((d) => !d)} title={darkMode ? "Switch to light mode" : "Switch to dark mode"}>
+              <span>{darkMode ? "☀️" : "🌙"}</span>
+              {!sidebarCollapsed && <span>{darkMode ? "Light Mode" : "Dark Mode"}</span>}
+            </button>
             <div className="sidebar-user">
               <div className="sidebar-avatar">I</div>
               {!sidebarCollapsed && (
@@ -2286,7 +2327,13 @@ export default function Page() {
             </div>
           </div>
         )}
-        {apiError && <div className="error-line">API error: {apiError}</div>}
+        {apiError && (
+          <div className="error-banner">
+            <span className="error-banner-icon">⚠️</span>
+            <span className="error-banner-msg">{apiError.replace(/^API \d+: /, "")}</span>
+            <button className="btn btn-sm" onClick={() => { setApiError(""); setRetryCount((c) => c + 1); }}>↺ Retry</button>
+          </div>
+        )}
 
         {activeTab === "goals" && (
           <>
@@ -2986,6 +3033,15 @@ export default function Page() {
               <div className="chart-panel-header">
                 <h3>Revenue Over Time</h3>
               </div>
+              {!daily.length && !loading ? (
+                <EmptyState
+                  icon="📈"
+                  title="No revenue data for this period"
+                  hint="Upload Amazon payment CSV files in the Data tab, or select a different date range."
+                  action="Go to Data & Import"
+                  onAction={() => setActiveTab("data")}
+                />
+              ) : (
               <div className="chart-wrap">
                 <ResponsiveContainer width="100%" height={360}>
                   <BarChart data={daily.map((r) => ({ ...r, dateLabel: formatDayLabel(r.date) }))}>
@@ -3000,6 +3056,7 @@ export default function Page() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
+              )}
             </section>
 
             <section className="panel">
@@ -3038,6 +3095,15 @@ export default function Page() {
                   )}
                 </tbody>
               </table>
+              {!sortedSalesRows.length && !loading && (
+                <EmptyState
+                  icon="📊"
+                  title="No sales data for this date range"
+                  hint="Try selecting a wider date range, or upload Amazon payment CSV files in the Data tab."
+                  action="Go to Data & Import"
+                  onAction={() => setActiveTab("data")}
+                />
+              )}
             </section>
           </>
         )}
@@ -3106,6 +3172,15 @@ export default function Page() {
                   ))}
                 </tbody>
               </table>
+              {!ntbData?.rows?.length && !loading && (
+                <EmptyState
+                  icon="👥"
+                  title="No New-To-Brand data yet"
+                  hint="Upload Amazon NTB customer reports in the Data tab to see monthly acquisition trends."
+                  action="Go to Data & Import"
+                  onAction={() => setActiveTab("data")}
+                />
+              )}
             </section>
           </>
         )}
@@ -3148,7 +3223,7 @@ export default function Page() {
             </section>
 
             <section className="panel">
-              <h3>Product Line Summary</h3>
+              <div className="panel-row"><h3>Product Line Summary</h3><button className="btn btn-sm" onClick={() => downloadCsv(`product_summary_${startDate}_to_${endDate}.csv`, productSummary)}>Export CSV</button></div>
               <table className="styled-table">
                 <thead><tr><th>Product Line</th><th>Sales</th><th>Units</th><th>Orders</th><th>AOV</th></tr></thead>
                 <tbody>
@@ -3348,7 +3423,7 @@ export default function Page() {
               <div className="field"><label>L30 Weight %</label><input type="number" value={w30} onChange={(e) => setW30(Number(e.target.value || 0))} /></div>
               <div className="field"><label>L60 Weight %</label><input type="number" value={w60} onChange={(e) => setW60(Number(e.target.value || 0))} /></div>
               <div className="field"><label>L90 Weight %</label><input type="number" value={w90} onChange={(e) => setW90(Number(e.target.value || 0))} /></div>
-              <div className="field"><label>Target WOS</label><input type="number" value={targetWos} step="0.5" onChange={(e) => setTargetWos(Number(e.target.value || 8))} /></div>
+              <div className="field"><label>Target WOS</label><input type="number" value={targetWos} step="0.5" min="0.5" max="52" onChange={(e) => setTargetWos(clamp(e.target.value, 0.5, 52))} /></div>
             </section>
             {weightTotal !== 100 && <div className="error-line">Demand weights must equal 100%. Current total: {weightTotal}%.</div>}
 
@@ -3504,6 +3579,15 @@ export default function Page() {
                     </div>
                   );
                 })}
+                {!inventory.rows?.length && !loading && (
+                  <EmptyState
+                    icon="📦"
+                    title="No inventory data uploaded"
+                    hint="Upload an FBA inventory snapshot report in the Data tab to see WOS, restock quantities, and availability."
+                    action="Go to Data & Import"
+                    onAction={() => setActiveTab("data")}
+                  />
+                )}
               </section>
             )}
 
