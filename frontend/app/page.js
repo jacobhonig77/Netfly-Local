@@ -338,6 +338,8 @@ export default function Page() {
   const [invSort, setInvSort] = useState({ key: "wos", dir: "asc" });
   const [ntbSort, setNtbSort] = useState({ key: "month", dir: "asc" });
   const [salesSort, setSalesSort] = useState({ key: "date", dir: "asc" });
+  const [insightSkuSort, setInsightSkuSort] = useState({ key: "sales", dir: "desc" });
+  const [insightLineFilter, setInsightLineFilter] = useState("all");
   const [expandedSku, setExpandedSku] = useState("");
   const [skuChart, setSkuChart] = useState({ rows: [], loading: false });
   const [skuMetric, setSkuMetric] = useState("sales");
@@ -722,9 +724,9 @@ export default function Page() {
         setProductTrend(payload?.product?.trend?.rows || []);
         setSkuSummary(payload?.product?.sku_summary?.rows || []);
         setSkuSummaryAll([
-          ...(payload?.product?.sku_summary_all?.iqbar?.rows || []),
-          ...(payload?.product?.sku_summary_all?.iqmix?.rows || []),
-          ...(payload?.product?.sku_summary_all?.iqjoe?.rows || []),
+          ...(payload?.product?.sku_summary_all?.iqbar?.rows || []).map((r) => ({ ...r, product_line: "IQBAR" })),
+          ...(payload?.product?.sku_summary_all?.iqmix?.rows || []).map((r) => ({ ...r, product_line: "IQMIX" })),
+          ...(payload?.product?.sku_summary_all?.iqjoe?.rows || []).map((r) => ({ ...r, product_line: "IQJOE" })),
         ]);
         setTopMovers(payload?.product?.top_movers || null);
         setMonthly(payload?.business?.monthly || { rows: [], summary: {} });
@@ -856,6 +858,21 @@ export default function Page() {
     }
     return Object.values(periodMap).sort((a, b) => (a.period > b.period ? 1 : -1));
   }, [productTrend, metric]);
+
+  const insightLineTotals = useMemo(() => {
+    const t = { IQBAR: 0, IQMIX: 0, IQJOE: 0 };
+    (skuSummaryAll || []).forEach((r) => {
+      if (t[r.product_line] !== undefined) t[r.product_line] += Number(r.sales || 0);
+    });
+    return t;
+  }, [skuSummaryAll]);
+
+  const insightSkuRows = useMemo(() => {
+    const rows = (skuSummaryAll || []).filter(
+      (r) => insightLineFilter === "all" || r.product_line === insightLineFilter,
+    );
+    return sortRows(rows, insightSkuSort.key, insightSkuSort.dir);
+  }, [skuSummaryAll, insightLineFilter, insightSkuSort]);
 
   const businessBest = useMemo(() => {
     const rows = (monthly?.rows || []).map((r) => {
@@ -3188,9 +3205,25 @@ export default function Page() {
         {/* ===================== PRODUCT LEVEL INSIGHTS ===================== */}
         {activeTab === "insights" && (
           <>
+            {/* Controls */}
             <section className="panel controls-inline">
-              <div className="field"><label>Granularity</label><select value={granularity} onChange={(e) => setGranularity(e.target.value)}><option value="day">Day</option><option value="week">Week</option><option value="month">Month</option></select></div>
-              <div className="field"><label>Metric</label><select value={metric} onChange={(e) => setMetric(e.target.value)}><option value="sales">Sales</option><option value="units">Units</option><option value="orders">Orders</option><option value="aov">AOV</option></select></div>
+              <div className="field">
+                <label>Granularity</label>
+                <select value={granularity} onChange={(e) => setGranularity(e.target.value)}>
+                  <option value="day">Day</option>
+                  <option value="week">Week</option>
+                  <option value="month">Month</option>
+                </select>
+              </div>
+              <div className="field">
+                <label>Metric</label>
+                <select value={metric} onChange={(e) => setMetric(e.target.value)}>
+                  <option value="sales">Revenue</option>
+                  <option value="units">Units</option>
+                  <option value="orders">Orders</option>
+                  <option value="aov">AOV</option>
+                </select>
+              </div>
               <div className="field">
                 <label>Product</label>
                 <select value={productTag} onChange={(e) => setProductTag(e.target.value)}>
@@ -3202,73 +3235,257 @@ export default function Page() {
               </div>
             </section>
 
-            <section className="panel chart-panel">
-              <div className="chart-panel-header">
-                <h3>Product Line Trend</h3>
-              </div>
-              <div className="chart-wrap">
-                <ResponsiveContainer width="100%" height={330}>
-                  <LineChart data={trendByLine}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e8eaf0" />
-                    <XAxis dataKey="period" tick={{ fill: "#8b90a0", fontSize: 12 }} />
-                    <YAxis tick={{ fill: "#8b90a0", fontSize: 12 }} />
-                    <Tooltip contentStyle={{ background: "#fff", border: "1px solid #e8eaf0", borderRadius: 10, fontSize: 13 }} />
-                    <Legend />
-                    <Line type="monotone" dataKey="IQBAR" stroke="#4f46e5" strokeWidth={2.5} dot={false} />
-                    <Line type="monotone" dataKey="IQMIX" stroke="#0ea5e9" strokeWidth={2.5} dot={false} />
-                    <Line type="monotone" dataKey="IQJOE" stroke="#f59e0b" strokeWidth={2.5} dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </section>
+            {/* Revenue Mix + Trend Chart */}
+            <div className="two-col-grid insight-mix-trend">
+              <section className="panel">
+                <h3>Revenue Mix</h3>
+                {(() => {
+                  const LINE_COLORS = { IQBAR: "#4f46e5", IQMIX: "#0ea5e9", IQJOE: "#f59e0b" };
+                  const total = (productSummary || []).reduce((s, r) => s + Number(r.sales || 0), 0);
+                  const lines = ["IQBAR", "IQMIX", "IQJOE"].map((line) => {
+                    const d = (productSummary || []).find((r) => String(r.product_line || "").toUpperCase() === line) || {};
+                    return { line, sales: Number(d.sales || 0), pct: total ? (Number(d.sales || 0) / total) : 0 };
+                  });
+                  const cx = 80, cy = 80, R = 65, ri = 45;
+                  let startAngle = -Math.PI / 2;
+                  const slices = lines.map(({ line, sales, pct }) => {
+                    const angle = pct * 2 * Math.PI;
+                    const x1 = cx + R * Math.cos(startAngle);
+                    const y1 = cy + R * Math.sin(startAngle);
+                    const endAngle = startAngle + angle;
+                    const x2 = cx + R * Math.cos(endAngle);
+                    const y2 = cy + R * Math.sin(endAngle);
+                    const xi1 = cx + ri * Math.cos(endAngle);
+                    const yi1 = cy + ri * Math.sin(endAngle);
+                    const xi2 = cx + ri * Math.cos(startAngle);
+                    const yi2 = cy + ri * Math.sin(startAngle);
+                    const large = angle > Math.PI ? 1 : 0;
+                    const path = `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${R} ${R} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} L ${xi1.toFixed(2)} ${yi1.toFixed(2)} A ${ri} ${ri} 0 ${large} 0 ${xi2.toFixed(2)} ${yi2.toFixed(2)} Z`;
+                    startAngle = endAngle;
+                    return { line, sales, pct, path };
+                  });
+                  if (!total) return (
+                    <EmptyState icon="🍩" title="No revenue data" hint="Load a date range with sales to see the mix chart." />
+                  );
+                  return (
+                    <div className="insight-donut-wrap">
+                      <svg width="160" height="160" viewBox="0 0 160 160" style={{ flexShrink: 0 }}>
+                        {slices.map((s) => (
+                          <path key={s.line} d={s.path} fill={LINE_COLORS[s.line]} opacity={0.92} />
+                        ))}
+                        <text x="80" y="75" textAnchor="middle" fontSize="11" fill="#8b90a0">Revenue</text>
+                        <text x="80" y="91" textAnchor="middle" fontSize="11" fill="#8b90a0">Mix</text>
+                      </svg>
+                      <div className="insight-donut-legend">
+                        {slices.map(({ line, sales, pct }) => (
+                          <div key={line} className="insight-legend-row">
+                            <span className="insight-legend-dot" style={{ background: LINE_COLORS[line] }} />
+                            <span className="insight-legend-label">{line}</span>
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                              <span className="insight-legend-pct" style={{ color: LINE_COLORS[line] }}>{(pct * 100).toFixed(1)}%</span>
+                              <span className="insight-legend-val">{fmtMoney(sales)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </section>
 
+              <section className="panel chart-panel">
+                <div className="panel-row" style={{ marginBottom: 8 }}>
+                  <h3>Product Line Trend</h3>
+                  <span className="muted-note" style={{ fontSize: 12 }}>
+                    {metric === "sales" ? "Revenue" : metric === "units" ? "Units" : metric === "orders" ? "Orders" : "AOV"} · {granularity}
+                  </span>
+                </div>
+                {!trendByLine.length && !loading ? (
+                  <EmptyState icon="📈" title="No trend data" hint="Adjust the date range or granularity to load trend data." />
+                ) : (
+                  <div className="chart-wrap">
+                    <ResponsiveContainer width="100%" height={260}>
+                      <LineChart data={trendByLine}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e8eaf0" />
+                        <XAxis dataKey="period" tick={{ fill: "#8b90a0", fontSize: 11 }} />
+                        <YAxis
+                          tick={{ fill: "#8b90a0", fontSize: 11 }}
+                          tickFormatter={(v) =>
+                            metric === "sales" || metric === "aov"
+                              ? v >= 1000 ? `$${(v / 1000).toFixed(0)}K` : `$${v}`
+                              : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : String(v)
+                          }
+                        />
+                        <Tooltip
+                          contentStyle={{ background: "#fff", border: "1px solid #e8eaf0", borderRadius: 10, fontSize: 12 }}
+                          formatter={(v, name) => [
+                            metric === "sales" || metric === "aov" ? fmtMoney(v) : Number(v).toLocaleString(),
+                            name,
+                          ]}
+                        />
+                        <Legend wrapperStyle={{ fontSize: 12 }} />
+                        <Line type="monotone" dataKey="IQBAR" stroke="#4f46e5" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
+                        <Line type="monotone" dataKey="IQMIX" stroke="#0ea5e9" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
+                        <Line type="monotone" dataKey="IQJOE" stroke="#f59e0b" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </section>
+            </div>
+
+            {/* SKU Performance Table */}
             <section className="panel">
-              <div className="panel-row"><h3>Product Line Summary</h3><button className="btn btn-sm" onClick={() => downloadCsv(`product_summary_${startDate}_to_${endDate}.csv`, productSummary)}>Export CSV</button></div>
-              <table className="styled-table">
-                <thead><tr><th>Product Line</th><th>Sales</th><th>Units</th><th>Orders</th><th>AOV</th></tr></thead>
-                <tbody>
-                  {productSummary
-                    .filter((r) => String(r.product_line || "").toLowerCase() !== "unmapped")
-                    .map((r) => (
-                    <tr key={r.product_line}><td>{r.product_line}</td><td className="num-cell">{fmtMoney(r.sales)}</td><td className="num-cell">{Number(r.units || 0).toLocaleString()}</td><td className="num-cell">{Number(r.orders || 0).toLocaleString()}</td><td className="num-cell">{fmtMoney(r.aov)}</td></tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="panel-row">
+                <h3>SKU Performance</h3>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <div className="field compact" style={{ marginBottom: 0 }}>
+                    <label>Product Line</label>
+                    <select value={insightLineFilter} onChange={(e) => setInsightLineFilter(e.target.value)}>
+                      <option value="all">All Lines</option>
+                      <option value="IQBAR">IQBAR</option>
+                      <option value="IQMIX">IQMIX</option>
+                      <option value="IQJOE">IQJOE</option>
+                    </select>
+                  </div>
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => downloadCsv(`sku_performance_${startDate}_to_${endDate}.csv`, insightSkuRows)}
+                  >
+                    Export CSV
+                  </button>
+                </div>
+              </div>
+              {insightSkuRows.length ? (
+                <table className="styled-table">
+                  <thead>
+                    <tr>
+                      {[
+                        { key: "sku", label: "Product" },
+                        { key: "product_line", label: "Line" },
+                        { key: "sales", label: "Revenue" },
+                        { key: "units", label: "Units" },
+                        { key: "orders", label: "Orders" },
+                        { key: "aov", label: "AOV" },
+                      ].map((col) => (
+                        <th
+                          key={col.key}
+                          className="sortable"
+                          onClick={() =>
+                            setInsightSkuSort((s) =>
+                              s.key === col.key
+                                ? { key: col.key, dir: s.dir === "asc" ? "desc" : "asc" }
+                                : { key: col.key, dir: col.key === "sku" || col.key === "product_line" ? "asc" : "desc" },
+                            )
+                          }
+                        >
+                          {col.label}{" "}
+                          {insightSkuSort.key === col.key ? (insightSkuSort.dir === "asc" ? "↑" : "↓") : "↕"}
+                        </th>
+                      ))}
+                      <th className="num-cell">% of Line Rev</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {insightSkuRows.map((r, i) => {
+                      const LINE_COLORS = { IQBAR: "#4f46e5", IQMIX: "#0ea5e9", IQJOE: "#f59e0b" };
+                      const lineColor = LINE_COLORS[r.product_line] || "#8b90a0";
+                      const lineTotal = insightLineTotals[r.product_line] || 0;
+                      const share = lineTotal > 0 ? Number(r.sales || 0) / lineTotal : 0;
+                      return (
+                        <tr key={`${r.sku}-${r.product_line}-${i}`}>
+                          <td>
+                            <span title={r.sku} style={{ fontSize: 13 }}>{r.tag || r.sku}</span>
+                          </td>
+                          <td>
+                            <span
+                              className="insight-line-pill"
+                              style={{ background: `${lineColor}22`, color: lineColor }}
+                            >
+                              {r.product_line}
+                            </span>
+                          </td>
+                          <td className="num-cell">{fmtMoney(r.sales)}</td>
+                          <td className="num-cell">{Number(r.units || 0).toLocaleString()}</td>
+                          <td className="num-cell">{Number(r.orders || 0).toLocaleString()}</td>
+                          <td className="num-cell">{fmtMoney(r.aov)}</td>
+                          <td className="num-cell">
+                            <div className="insight-share-bar">
+                              <div
+                                className="insight-share-fill"
+                                style={{ width: `${Math.min(100, share * 100)}%`, background: lineColor }}
+                              />
+                              <span className="insight-share-pct">{(share * 100).toFixed(1)}%</span>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              ) : !loading ? (
+                <EmptyState
+                  icon="📦"
+                  title="No SKU data for this selection"
+                  hint="Try changing the product line filter or date range. SKU data requires Amazon payment data to be uploaded."
+                />
+              ) : null}
             </section>
 
-            {topMovers && (
+            {/* Top Movers — redesigned */}
+            {topMovers && (topMovers.gainers?.length > 0 || topMovers.decliners?.length > 0) && (
               <div className="two-col-grid">
                 <section className="panel">
-                  <h3>Top Gainers ({productTag || "Product"})</h3>
-                  <table className="styled-table">
-                    <thead><tr><th>Product</th><th>Sales</th><th>Prev</th><th>Change</th></tr></thead>
-                    <tbody>
-                      {(topMovers.gainers || []).map((r, i) => (
-                        <tr key={`g-${i}`}>
-                          <td title={r.sku}>{r.tag || r.sku}</td>
-                          <td className="num-cell">{fmtMoney(r.sales)}</td>
-                          <td className="num-cell">{fmtMoney(r.prev_sales)}</td>
-                          <td className="num-cell"><span className="delta-badge up">{fmtMoney(r.change)}</span></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <h3>
+                    📈 Top Gainers
+                    <span className="muted-note" style={{ fontSize: 12, fontWeight: 400, marginLeft: 6 }}>
+                      vs. prior period
+                    </span>
+                  </h3>
+                  <div className="movers-list">
+                    {(topMovers.gainers || []).map((r, i) => {
+                      const pct = Number(r.change_pct || 0) * 100;
+                      return (
+                        <div key={`g-${i}`} className="mover-row">
+                          <div className="mover-rank">#{i + 1}</div>
+                          <div className="mover-name" title={r.sku}>{r.tag || r.sku}</div>
+                          <div className="mover-vals">
+                            <span className="mover-current">{fmtMoney(r.sales)}</span>
+                            <span className="mover-prev">prev {fmtMoney(r.prev_sales)}</span>
+                          </div>
+                          <span className="delta-badge up">
+                            {pct !== 0 ? `+${pct.toFixed(1)}%` : `+${fmtMoney(r.change)}`}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </section>
                 <section className="panel">
-                  <h3>Top Decliners ({productTag || "Product"})</h3>
-                  <table className="styled-table">
-                    <thead><tr><th>Product</th><th>Sales</th><th>Prev</th><th>Change</th></tr></thead>
-                    <tbody>
-                      {(topMovers.decliners || []).map((r, i) => (
-                        <tr key={`d-${i}`}>
-                          <td title={r.sku}>{r.tag || r.sku}</td>
-                          <td className="num-cell">{fmtMoney(r.sales)}</td>
-                          <td className="num-cell">{fmtMoney(r.prev_sales)}</td>
-                          <td className="num-cell"><span className="delta-badge down">{fmtMoney(r.change)}</span></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <h3>
+                    📉 Top Decliners
+                    <span className="muted-note" style={{ fontSize: 12, fontWeight: 400, marginLeft: 6 }}>
+                      vs. prior period
+                    </span>
+                  </h3>
+                  <div className="movers-list">
+                    {(topMovers.decliners || []).map((r, i) => {
+                      const pct = Number(r.change_pct || 0) * 100;
+                      return (
+                        <div key={`d-${i}`} className="mover-row">
+                          <div className="mover-rank">#{i + 1}</div>
+                          <div className="mover-name" title={r.sku}>{r.tag || r.sku}</div>
+                          <div className="mover-vals">
+                            <span className="mover-current">{fmtMoney(r.sales)}</span>
+                            <span className="mover-prev">prev {fmtMoney(r.prev_sales)}</span>
+                          </div>
+                          <span className="delta-badge down">
+                            {pct !== 0 ? `${pct.toFixed(1)}%` : fmtMoney(r.change)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </section>
               </div>
             )}
