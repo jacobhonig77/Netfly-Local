@@ -651,14 +651,14 @@ export default function Page() {
     setLoading(true);
     setLoadingProgress(1);
     setApiError("");
+    const startTime = Date.now();
+    const expectedMs = 3500;
     progressTimer = setInterval(() => {
       if (isCancelled) return;
-      setLoadingProgress((p) => {
-        if (p >= 95) return p;
-        const step = Math.max(1, Math.ceil((100 - p) / 12));
-        return Math.min(95, p + step);
-      });
-    }, 280);
+      const elapsed = Date.now() - startTime;
+      const pct = Math.min(90, (elapsed / expectedMs) * 90);
+      setLoadingProgress(Math.max(1, Math.round(pct)));
+    }, 80);
 
     (async () => {
       try {
@@ -3421,8 +3421,9 @@ export default function Page() {
                                   <button
                                     className="expander"
                                     onClick={() => setExpandedSku((s) => (s === r.sku ? "" : r.sku))}
+                                    title={String(r.tag || r.sku || "").replace(/\s+/g, " ").trim()}
                                   >
-                                    {expandedSku === r.sku ? "▾" : "▸"} {r.tag}
+                                    {expandedSku === r.sku ? "▾" : "▸"} {String(r.tag || r.sku || "").replace(/\s+/g, " ").trim()}
                                   </button>
                                 </td>
                                 <td className="num-cell">{Number(r.wos || 0).toFixed(1)}</td>
@@ -3585,8 +3586,9 @@ export default function Page() {
                                   <button
                                     className="expander"
                                     onClick={() => setExpandedSku((s) => (s === r.sku ? "" : r.sku))}
+                                    title={String(r.tag || r.sku || "").replace(/\s+/g, " ").trim()}
                                   >
-                                    {expandedSku === r.sku ? "▾" : "▸"} {r.tag}
+                                    {expandedSku === r.sku ? "▾" : "▸"} {String(r.tag || r.sku || "").replace(/\s+/g, " ").trim()}
                                   </button>
                                 </td>
                                 <td className="num-cell">{Number(r.wos || 0).toFixed(1)}</td>
