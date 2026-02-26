@@ -3670,6 +3670,16 @@ export default function Page() {
                     }));
                     downloadCsv("inventory_latest.csv", exportRows);
                   }}>Export Inventory CSV</button>
+                  <button className="btn btn-sm" onClick={() => {
+                    const demandRows = (inventory.rows || [])
+                      .filter((r) => !String(r.tag || "").toLowerCase().includes("manual override"))
+                      .map((r) => ({
+                        SKU: r.sku,
+                        "Last 30 Day Units": Number(r.units_30d || 0),
+                        "Daily Demand": Number(r.daily_demand || 0).toFixed(2),
+                      }));
+                    downloadCsv("demand_export.csv", demandRows);
+                  }}>Export Demand CSV</button>
                 </div>
                 {["IQBAR", "IQMIX", "IQJOE"].map((line) => {
                   const baseRows = ((inventory.by_line || {})[line] || []).filter(
