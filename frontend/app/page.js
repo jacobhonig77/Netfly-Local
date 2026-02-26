@@ -341,6 +341,7 @@ export default function Page() {
   const [insightSkuSort, setInsightSkuSort] = useState({ key: "sales", dir: "desc" });
   const [insightLineFilter, setInsightLineFilter] = useState("all");
   const [insightPopMode, setInsightPopMode] = useState("pct"); // "pct" | "$"
+  const [kpiDeltaMode, setKpiDeltaMode] = useState("pct"); // "pct" | "$"
   const [expandedSku, setExpandedSku] = useState("");
   const [skuChart, setSkuChart] = useState({ rows: [], loading: false });
   const [skuMetric, setSkuMetric] = useState("sales");
@@ -926,20 +927,23 @@ export default function Page() {
 
   const salesKpis = useMemo(() => {
     if (!salesSummary) return [];
+
+    const curr = salesSummary.current;
+    const comp = salesSummary.compare;
     const cards = [
-      { label: "Grand Total", value: salesSummary.current.grand_total, delta: salesSummary.deltas.grand_total },
-      { label: "IQBAR", value: salesSummary.current.iqbar, delta: salesSummary.deltas.iqbar },
-      { label: "IQMIX", value: salesSummary.current.iqmix, delta: salesSummary.deltas.iqmix },
-      { label: "IQJOE", value: salesSummary.current.iqjoe, delta: salesSummary.deltas.iqjoe },
+      { label: "Grand Total", value: curr.grand_total, delta: salesSummary.deltas.grand_total, deltaDollar: curr.grand_total - comp.grand_total },
+      { label: "IQBAR",       value: curr.iqbar,       delta: salesSummary.deltas.iqbar,       deltaDollar: curr.iqbar  - comp.iqbar },
+      { label: "IQMIX",       value: curr.iqmix,       delta: salesSummary.deltas.iqmix,       deltaDollar: curr.iqmix  - comp.iqmix },
+      { label: "IQJOE",       value: curr.iqjoe,       delta: salesSummary.deltas.iqjoe,       deltaDollar: curr.iqjoe  - comp.iqjoe },
     ];
     if (!isMtdSelected) return cards;
 
     const linearTotal = Number(salesSummary?.mtd?.linear?.projected_total || 0);
     const dynamicTotal = Number(forecast?.projected_total || salesSummary?.mtd?.dynamic?.projected_total || 0);
-    const currentTotal = Number(salesSummary?.current?.grand_total || 0);
-    const currentIqbar = Number(salesSummary?.current?.iqbar || 0);
-    const currentIqmix = Number(salesSummary?.current?.iqmix || 0);
-    const currentIqjoe = Number(salesSummary?.current?.iqjoe || 0);
+    const currentTotal = Number(curr?.grand_total || 0);
+    const currentIqbar = Number(curr?.iqbar || 0);
+    const currentIqmix = Number(curr?.iqmix || 0);
+    const currentIqjoe = Number(curr?.iqjoe || 0);
     const linearScale = currentTotal > 0 ? (linearTotal / currentTotal) : 0;
     const dynamicScale = currentTotal > 0 ? (dynamicTotal / currentTotal) : 0;
     const linearByLine = {
@@ -971,6 +975,11 @@ export default function Page() {
       if (g <= 0) return null;
       return (Number(projected || 0) / g) - 1;
     };
+    const goalDeltaDollar = (projected, key) => {
+      const g = Number(monthGoalMap[key] || 0);
+      if (g <= 0) return null;
+      return Number(projected || 0) - g;
+    };
     const paceBestNote = (projected, key) => {
       const best = Number(bestByLine[key] || 0);
       if (best <= 0) return "";
@@ -979,16 +988,16 @@ export default function Page() {
     };
 
     cards.push(
-      { label: "Linear Pace · Grand Total", value: linearByLine.TOTAL, delta: goalDelta(linearByLine.TOTAL, "TOTAL"), deltaLabel: "vs goal", note: paceBestNote(linearByLine.TOTAL, "TOTAL") },
-      { label: "Linear Pace · IQBAR", value: linearByLine.IQBAR, delta: goalDelta(linearByLine.IQBAR, "IQBAR"), deltaLabel: "vs goal", note: paceBestNote(linearByLine.IQBAR, "IQBAR") },
-      { label: "Linear Pace · IQMIX", value: linearByLine.IQMIX, delta: goalDelta(linearByLine.IQMIX, "IQMIX"), deltaLabel: "vs goal", note: paceBestNote(linearByLine.IQMIX, "IQMIX") },
-      { label: "Linear Pace · IQJOE", value: linearByLine.IQJOE, delta: goalDelta(linearByLine.IQJOE, "IQJOE"), deltaLabel: "vs goal", note: paceBestNote(linearByLine.IQJOE, "IQJOE") },
+      { label: "Linear Pace · Grand Total", value: linearByLine.TOTAL, delta: goalDelta(linearByLine.TOTAL, "TOTAL"), deltaDollar: goalDeltaDollar(linearByLine.TOTAL, "TOTAL"), deltaLabel: "vs goal", note: paceBestNote(linearByLine.TOTAL, "TOTAL") },
+      { label: "Linear Pace · IQBAR",       value: linearByLine.IQBAR, delta: goalDelta(linearByLine.IQBAR, "IQBAR"), deltaDollar: goalDeltaDollar(linearByLine.IQBAR, "IQBAR"), deltaLabel: "vs goal", note: paceBestNote(linearByLine.IQBAR, "IQBAR") },
+      { label: "Linear Pace · IQMIX",       value: linearByLine.IQMIX, delta: goalDelta(linearByLine.IQMIX, "IQMIX"), deltaDollar: goalDeltaDollar(linearByLine.IQMIX, "IQMIX"), deltaLabel: "vs goal", note: paceBestNote(linearByLine.IQMIX, "IQMIX") },
+      { label: "Linear Pace · IQJOE",       value: linearByLine.IQJOE, delta: goalDelta(linearByLine.IQJOE, "IQJOE"), deltaDollar: goalDeltaDollar(linearByLine.IQJOE, "IQJOE"), deltaLabel: "vs goal", note: paceBestNote(linearByLine.IQJOE, "IQJOE") },
     );
     cards.push(
-      { label: "Dynamic Pace · Grand Total", value: dynamicByLine.TOTAL, delta: goalDelta(dynamicByLine.TOTAL, "TOTAL"), deltaLabel: "vs goal", note: paceBestNote(dynamicByLine.TOTAL, "TOTAL") },
-      { label: "Dynamic Pace · IQBAR", value: dynamicByLine.IQBAR, delta: goalDelta(dynamicByLine.IQBAR, "IQBAR"), deltaLabel: "vs goal", note: paceBestNote(dynamicByLine.IQBAR, "IQBAR") },
-      { label: "Dynamic Pace · IQMIX", value: dynamicByLine.IQMIX, delta: goalDelta(dynamicByLine.IQMIX, "IQMIX"), deltaLabel: "vs goal", note: paceBestNote(dynamicByLine.IQMIX, "IQMIX") },
-      { label: "Dynamic Pace · IQJOE", value: dynamicByLine.IQJOE, delta: goalDelta(dynamicByLine.IQJOE, "IQJOE"), deltaLabel: "vs goal", note: paceBestNote(dynamicByLine.IQJOE, "IQJOE") },
+      { label: "Dynamic Pace · Grand Total", value: dynamicByLine.TOTAL, delta: goalDelta(dynamicByLine.TOTAL, "TOTAL"), deltaDollar: goalDeltaDollar(dynamicByLine.TOTAL, "TOTAL"), deltaLabel: "vs goal", note: paceBestNote(dynamicByLine.TOTAL, "TOTAL") },
+      { label: "Dynamic Pace · IQBAR",       value: dynamicByLine.IQBAR, delta: goalDelta(dynamicByLine.IQBAR, "IQBAR"), deltaDollar: goalDeltaDollar(dynamicByLine.IQBAR, "IQBAR"), deltaLabel: "vs goal", note: paceBestNote(dynamicByLine.IQBAR, "IQBAR") },
+      { label: "Dynamic Pace · IQMIX",       value: dynamicByLine.IQMIX, delta: goalDelta(dynamicByLine.IQMIX, "IQMIX"), deltaDollar: goalDeltaDollar(dynamicByLine.IQMIX, "IQMIX"), deltaLabel: "vs goal", note: paceBestNote(dynamicByLine.IQMIX, "IQMIX") },
+      { label: "Dynamic Pace · IQJOE",       value: dynamicByLine.IQJOE, delta: goalDelta(dynamicByLine.IQJOE, "IQJOE"), deltaDollar: goalDeltaDollar(dynamicByLine.IQJOE, "IQJOE"), deltaLabel: "vs goal", note: paceBestNote(dynamicByLine.IQJOE, "IQJOE") },
     );
     return cards;
   }, [salesSummary, forecast?.projected_total, isMtdSelected, businessBest, monthGoalMap]);
@@ -3025,6 +3034,12 @@ export default function Page() {
         {/* ===================== SALES OVERVIEW ===================== */}
         {activeTab === "sales" && (
           <>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+              <div className="pop-toggle">
+                <button className={`pop-toggle-btn${kpiDeltaMode === "pct" ? " active" : ""}`} onClick={() => setKpiDeltaMode("pct")}>%</button>
+                <button className={`pop-toggle-btn${kpiDeltaMode === "$" ? " active" : ""}`} onClick={() => setKpiDeltaMode("$")}>$</button>
+              </div>
+            </div>
             <section className="kpi-grid four-cols">
               {salesKpis.map((k, idx) => {
                 let toneClass = "kpi-tone-top";
@@ -3040,7 +3055,7 @@ export default function Page() {
                   }
                 }
                 return (
-                  <KpiCard key={k.label} {...k} toneClass={toneClass} badge={badge} badgeClass={badgeClass} />
+                  <KpiCard key={k.label} {...k} deltaMode={kpiDeltaMode} toneClass={toneClass} badge={badge} badgeClass={badgeClass} />
                 );
               })}
             </section>
