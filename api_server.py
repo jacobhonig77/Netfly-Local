@@ -1554,7 +1554,7 @@ def dashboard(
         "product.sku_all.iqbar":      (product_sku_summary, [], {"product_line": "IQBAR", **common}),
         "product.sku_all.iqmix":      (product_sku_summary, [], {"product_line": "IQMIX", **common}),
         "product.sku_all.iqjoe":      (product_sku_summary, [], {"product_line": "IQJOE", **common}),
-        "product.top_movers":         (product_top_movers, [], {"product_line": product_line, "product_tag": product_tag, **common}),
+        "product.top_movers":         (product_top_movers, [], {"product_line": "all", **common}),
         "business.monthly":           (business_monthly, [], {"channel": channel}),
         "business.pnl_summary":       (pnl_summary, [], {"start_date": resolved_start, "end_date": resolved_end}),
         "forecast.mtd":               (forecast_mtd, [], {"as_of_date": resolved_end, "channel": channel, "recent_weight": recent_weight, "mom_weight": mom_weight, "weekday_strength": weekday_strength, "manual_multiplier": manual_multiplier, "promo_lift_pct": promo_lift_pct, "content_lift_pct": content_lift_pct, "instock_rate": instock_rate, "growth_floor": growth_floor, "growth_ceiling": growth_ceiling, "volatility_multiplier": volatility_multiplier}),
@@ -2122,15 +2122,27 @@ def product_sku_summary(
         )
         rows["aov"] = rows.apply(lambda r: float(r["sales"]) / float(r["orders"]) if float(r["orders"]) else 0.0, axis=1)
         return {"rows": rows.to_dict(orient="records")}
+    span = (end - start).days + 1
+    prev_end = start - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=span - 1)
     rows = read_df(
         """
         SELECT
           t.sku,
+          MIN(COALESCE(m.tag, t.sku)) AS tag,
           COALESCE(SUM(t.sales_o_to_y),0) AS sales,
           COALESCE(SUM(t.quantity),0) AS units,
-          COUNT(DISTINCT t.order_id) AS orders
+          COUNT(DISTINCT t.order_id) AS orders,
+          COALESCE(MAX(p.prev_sales),0) AS prev_sales,
+          COALESCE(MAX(p.prev_units),0) AS prev_units
         FROM transactions t
         LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
+        LEFT JOIN (
+          SELECT sku, SUM(sales_o_to_y) AS prev_sales, SUM(quantity) AS prev_units
+          FROM transactions
+          WHERE date BETWEEN ? AND ? AND channel = ?
+          GROUP BY sku
+        ) p ON p.sku = t.sku
         WHERE t.date BETWEEN ? AND ?
           AND t.channel = ?
           AND COALESCE(m.product_line, 'Unmapped') = ?
@@ -2138,13 +2150,15 @@ def product_sku_summary(
             COALESCE(CAST(? AS TEXT), '') = ''
             OR LOWER(TRIM(COALESCE(m.tag, t.sku))) = LOWER(TRIM(CAST(? AS TEXT)))
           )
-        GROUP BY 1
+        GROUP BY t.sku
         ORDER BY sales DESC
         LIMIT 100
         """,
-        (str(start), str(end), ch, product_line, product_tag, product_tag),
+        (str(prev_start), str(prev_end), ch, str(start), str(end), ch, product_line, product_tag, product_tag),
     )
     rows["aov"] = rows.apply(lambda r: float(r["sales"]) / float(r["orders"]) if float(r["orders"]) else 0.0, axis=1)
+    rows["sales_pop"] = rows.apply(lambda r: pct_delta(float(r["sales"]), float(r["prev_sales"])), axis=1)
+    rows["units_pop"] = rows.apply(lambda r: pct_delta(float(r["units"]), float(r["prev_units"])), axis=1)
     return {"rows": rows.to_dict(orient="records")}
 
 
@@ -2256,14 +2270,10 @@ def product_top_movers(
         LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
         WHERE t.date BETWEEN ? AND ?
           AND t.channel = ?
-          AND COALESCE(m.product_line, 'Unmapped') = ?
-          AND (
-            COALESCE(CAST(? AS TEXT), '') = ''
-            OR LOWER(TRIM(COALESCE(m.tag, t.sku))) = LOWER(TRIM(CAST(? AS TEXT)))
-          )
+          AND (? = 'all' OR COALESCE(m.product_line, 'Unmapped') = ?)
         GROUP BY t.sku
         """,
-        (str(start), str(end), ch, product_line, product_tag, product_tag),
+        (str(start), str(end), ch, product_line, product_line),
     )
     prev = read_df(
         """
@@ -2275,14 +2285,10 @@ def product_top_movers(
         LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
         WHERE t.date BETWEEN ? AND ?
           AND t.channel = ?
-          AND COALESCE(m.product_line, 'Unmapped') = ?
-          AND (
-            COALESCE(CAST(? AS TEXT), '') = ''
-            OR LOWER(TRIM(COALESCE(m.tag, t.sku))) = LOWER(TRIM(CAST(? AS TEXT)))
-          )
+          AND (? = 'all' OR COALESCE(m.product_line, 'Unmapped') = ?)
         GROUP BY t.sku
         """,
-        (str(prev_start), str(prev_end), ch, product_line, product_tag, product_tag),
+        (str(prev_start), str(prev_end), ch, product_line, product_line),
     )
     if curr.empty:
         return {"gainers": [], "decliners": []}

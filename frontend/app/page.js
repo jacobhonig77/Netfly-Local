@@ -696,8 +696,6 @@ export default function Page() {
           end_date: endDate,
           compare_mode: compareMode,
           granularity,
-          product_line: selectedInsightProductLine,
-          product_tag: productTag || undefined,
           w7,
           w30,
           w60,
@@ -763,7 +761,7 @@ export default function Page() {
       if (progressTimer) clearInterval(progressTimer);
       if (hideTimer) clearTimeout(hideTimer);
     };
-  }, [startDate, endDate, compareMode, granularity, productTag, selectedInsightProductLine, w7, w30, w60, w90, targetWos, aRecentWeight, aMomWeight, aWeekdayStrength, aManualMultiplier, aPromoLift, aContentLift, aInstockRate, aGrowthFloor, aGrowthCeiling, aVolatility, channelParams, workspaceChannel, retryCount]);
+  }, [startDate, endDate, compareMode, granularity, w7, w30, w60, w90, targetWos, aRecentWeight, aMomWeight, aWeekdayStrength, aManualMultiplier, aPromoLift, aContentLift, aInstockRate, aGrowthFloor, aGrowthCeiling, aVolatility, channelParams, workspaceChannel, retryCount]);
 
 
   useEffect(() => {
@@ -3224,15 +3222,6 @@ export default function Page() {
                   <option value="aov">AOV</option>
                 </select>
               </div>
-              <div className="field">
-                <label>Product</label>
-                <select value={productTag} onChange={(e) => setProductTag(e.target.value)}>
-                  {!insightProductOptions.length && <option value="">No products available</option>}
-                  {insightProductOptions.map((tag) => (
-                    <option key={tag} value={tag}>{tag}</option>
-                  ))}
-                </select>
-              </div>
             </section>
 
             {/* Revenue Mix + Trend Chart */}
@@ -3269,12 +3258,12 @@ export default function Page() {
                   );
                   return (
                     <div className="insight-donut-wrap">
-                      <svg width="160" height="160" viewBox="0 0 160 160" style={{ flexShrink: 0 }}>
+                      <svg width="160" height="160" viewBox="0 0 160 160" style={{ flexShrink: 0, display: "block" }}>
                         {slices.map((s) => (
-                          <path key={s.line} d={s.path} fill={LINE_COLORS[s.line]} opacity={0.92} />
+                          <path key={s.line} d={s.path} fill={LINE_COLORS[s.line]} opacity={0.92} stroke="#fff" strokeWidth="1.5" />
                         ))}
-                        <text x="80" y="75" textAnchor="middle" fontSize="11" fill="#8b90a0">Revenue</text>
-                        <text x="80" y="91" textAnchor="middle" fontSize="11" fill="#8b90a0">Mix</text>
+                        <text x="80" y="77" textAnchor="middle" fontSize="12" fill="#8b90a0" fontWeight="500">Revenue</text>
+                        <text x="80" y="93" textAnchor="middle" fontSize="12" fill="#8b90a0" fontWeight="500">Mix</text>
                       </svg>
                       <div className="insight-donut-legend">
                         {slices.map(({ line, sales, pct }) => (
@@ -3363,14 +3352,14 @@ export default function Page() {
                       {[
                         { key: "sku", label: "Product" },
                         { key: "product_line", label: "Line" },
-                        { key: "sales", label: "Revenue" },
+                        { key: "sales", label: "Sales" },
+                        { key: "sales_pop", label: "Sales PoP" },
                         { key: "units", label: "Units" },
-                        { key: "orders", label: "Orders" },
-                        { key: "aov", label: "AOV" },
+                        { key: "units_pop", label: "Units PoP" },
                       ].map((col) => (
                         <th
                           key={col.key}
-                          className="sortable"
+                          className={["sales", "sales_pop", "units", "units_pop"].includes(col.key) ? "sortable num-cell" : "sortable"}
                           onClick={() =>
                             setInsightSkuSort((s) =>
                               s.key === col.key
@@ -3383,7 +3372,7 @@ export default function Page() {
                           {insightSkuSort.key === col.key ? (insightSkuSort.dir === "asc" ? "↑" : "↓") : "↕"}
                         </th>
                       ))}
-                      <th className="num-cell">% of Line Rev</th>
+                      <th className="num-cell">% of Line</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -3392,29 +3381,33 @@ export default function Page() {
                       const lineColor = LINE_COLORS[r.product_line] || "#8b90a0";
                       const lineTotal = insightLineTotals[r.product_line] || 0;
                       const share = lineTotal > 0 ? Number(r.sales || 0) / lineTotal : 0;
+                      const salesPop = Number(r.sales_pop || 0);
+                      const unitsPop = Number(r.units_pop || 0);
                       return (
                         <tr key={`${r.sku}-${r.product_line}-${i}`}>
                           <td>
                             <span title={r.sku} style={{ fontSize: 13 }}>{r.tag || r.sku}</span>
                           </td>
                           <td>
-                            <span
-                              className="insight-line-pill"
-                              style={{ background: `${lineColor}22`, color: lineColor }}
-                            >
+                            <span className="insight-line-pill" style={{ background: `${lineColor}22`, color: lineColor }}>
                               {r.product_line}
                             </span>
                           </td>
                           <td className="num-cell">{fmtMoney(r.sales)}</td>
+                          <td className="num-cell">
+                            <span className={`delta-badge ${salesPop >= 0 ? "up" : "down"}`}>
+                              {salesPop >= 0 ? "+" : ""}{(salesPop * 100).toFixed(1)}%
+                            </span>
+                          </td>
                           <td className="num-cell">{Number(r.units || 0).toLocaleString()}</td>
-                          <td className="num-cell">{Number(r.orders || 0).toLocaleString()}</td>
-                          <td className="num-cell">{fmtMoney(r.aov)}</td>
+                          <td className="num-cell">
+                            <span className={`delta-badge ${unitsPop >= 0 ? "up" : "down"}`}>
+                              {unitsPop >= 0 ? "+" : ""}{(unitsPop * 100).toFixed(1)}%
+                            </span>
+                          </td>
                           <td className="num-cell">
                             <div className="insight-share-bar">
-                              <div
-                                className="insight-share-fill"
-                                style={{ width: `${Math.min(100, share * 100)}%`, background: lineColor }}
-                              />
+                              <div className="insight-share-fill" style={{ width: `${Math.min(100, share * 100)}%`, background: lineColor }} />
                               <span className="insight-share-pct">{(share * 100).toFixed(1)}%</span>
                             </div>
                           </td>
