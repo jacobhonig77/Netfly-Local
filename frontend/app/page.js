@@ -340,6 +340,7 @@ export default function Page() {
   const [salesSort, setSalesSort] = useState({ key: "date", dir: "asc" });
   const [insightSkuSort, setInsightSkuSort] = useState({ key: "sales", dir: "desc" });
   const [insightLineFilter, setInsightLineFilter] = useState("all");
+  const [insightPopMode, setInsightPopMode] = useState("pct"); // "pct" | "$"
   const [expandedSku, setExpandedSku] = useState("");
   const [skuChart, setSkuChart] = useState({ rows: [], loading: false });
   const [skuMetric, setSkuMetric] = useState("sales");
@@ -3337,6 +3338,16 @@ export default function Page() {
                       <option value="IQJOE">IQJOE</option>
                     </select>
                   </div>
+                  <div className="pop-toggle">
+                    <button
+                      className={`pop-toggle-btn${insightPopMode === "pct" ? " active" : ""}`}
+                      onClick={() => setInsightPopMode("pct")}
+                    >%</button>
+                    <button
+                      className={`pop-toggle-btn${insightPopMode === "$" ? " active" : ""}`}
+                      onClick={() => setInsightPopMode("$")}
+                    >$</button>
+                  </div>
                   <button
                     className="btn btn-sm"
                     onClick={() => downloadCsv(`sku_performance_${startDate}_to_${endDate}.csv`, insightSkuRows)}
@@ -3353,9 +3364,9 @@ export default function Page() {
                         { key: "sku", label: "Product" },
                         { key: "product_line", label: "Line" },
                         { key: "sales", label: "Sales" },
-                        { key: "sales_pop", label: "Sales PoP" },
+                        { key: "sales_pop", label: `Sales PoP ${insightPopMode === "pct" ? "%" : "$"}` },
                         { key: "units", label: "Units" },
-                        { key: "units_pop", label: "Units PoP" },
+                        { key: "units_pop", label: `Units PoP ${insightPopMode === "pct" ? "%" : "#"}` },
                       ].map((col) => (
                         <th
                           key={col.key}
@@ -3383,6 +3394,8 @@ export default function Page() {
                       const share = lineTotal > 0 ? Number(r.sales || 0) / lineTotal : 0;
                       const salesPop = Number(r.sales_pop || 0);
                       const unitsPop = Number(r.units_pop || 0);
+                      const salesDelta = Number(r.sales || 0) - Number(r.prev_sales || 0);
+                      const unitsDelta = Number(r.units || 0) - Number(r.prev_units || 0);
                       return (
                         <tr key={`${r.sku}-${r.product_line}-${i}`}>
                           <td>
@@ -3396,13 +3409,17 @@ export default function Page() {
                           <td className="num-cell">{fmtMoney(r.sales)}</td>
                           <td className="num-cell">
                             <span className={`delta-badge ${salesPop >= 0 ? "up" : "down"}`}>
-                              {salesPop >= 0 ? "+" : ""}{(salesPop * 100).toFixed(1)}%
+                              {insightPopMode === "pct"
+                                ? `${salesPop >= 0 ? "+" : ""}${(salesPop * 100).toFixed(1)}%`
+                                : `${salesDelta >= 0 ? "+" : "-"}${fmtMoney(Math.abs(salesDelta))}`}
                             </span>
                           </td>
                           <td className="num-cell">{Number(r.units || 0).toLocaleString()}</td>
                           <td className="num-cell">
                             <span className={`delta-badge ${unitsPop >= 0 ? "up" : "down"}`}>
-                              {unitsPop >= 0 ? "+" : ""}{(unitsPop * 100).toFixed(1)}%
+                              {insightPopMode === "pct"
+                                ? `${unitsPop >= 0 ? "+" : ""}${(unitsPop * 100).toFixed(1)}%`
+                                : `${unitsDelta >= 0 ? "+" : ""}${unitsDelta.toLocaleString()}`}
                             </span>
                           </td>
                           <td className="num-cell">

@@ -2598,6 +2598,31 @@ html[data-theme="dark"] .error-banner {
   white-space: nowrap;
 }
 
+/* ========== POP TOGGLE ========== */
+.pop-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.pop-toggle-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: background 0.15s, color 0.15s;
+}
+.pop-toggle-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+.pop-toggle-btn:not(.active):hover {
+  background: var(--bg-hover, #f0f0f0);
+}
+
 /* ========== TOP MOVERS REDESIGN ========== */
 .movers-list {
   display: flex;
