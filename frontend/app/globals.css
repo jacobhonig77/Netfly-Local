@@ -1031,7 +1031,9 @@ html, body {
 .inv-table td:first-child, .inv-table th:first-child {
   text-align: left;
   white-space: nowrap;
-  width: 360px;
+  width: 280px;
+  min-width: 180px;
+  vertical-align: middle;
 }
 
 .insight-list {
@@ -1059,6 +1061,7 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 1.2;
+  text-align: left;
 }
 
 .sku-drill { display: grid; gap: 8px; padding: 8px 0; }
