@@ -2301,13 +2301,32 @@ export default function Page() {
                         Date {sortCoverageArrow("date")}
                       </th>
                       <th className="sortable" onClick={() => setCoverageSort((s) => (s.key === "uploaded" ? { key: "uploaded", dir: s.dir === "asc" ? "desc" : "asc" } : { key: "uploaded", dir: "asc" }))}>
-                        Uploaded {sortCoverageArrow("uploaded")}
+                        Any Data {sortCoverageArrow("uploaded")}
                       </th>
+                      {sortedCoverageRows[0]?.iqbar !== undefined && (<>
+                        <th className="sortable" onClick={() => setCoverageSort((s) => ({ key: "iqbar", dir: s.key === "iqbar" && s.dir === "asc" ? "desc" : "asc" }))}>
+                          IQBAR {sortCoverageArrow("iqbar")}
+                        </th>
+                        <th className="sortable" onClick={() => setCoverageSort((s) => ({ key: "iqmix", dir: s.key === "iqmix" && s.dir === "asc" ? "desc" : "asc" }))}>
+                          IQMIX {sortCoverageArrow("iqmix")}
+                        </th>
+                        <th className="sortable" onClick={() => setCoverageSort((s) => ({ key: "iqjoe", dir: s.key === "iqjoe" && s.dir === "asc" ? "desc" : "asc" }))}>
+                          IQJOE {sortCoverageArrow("iqjoe")}
+                        </th>
+                      </>)}
                     </tr>
                   </thead>
                   <tbody>
                     {sortedCoverageRows.slice(0, 1000).map((r) => (
-                      <tr key={r.date}><td>{r.date}</td><td className={r.uploaded ? "status-green" : "status-red"}>{r.uploaded ? "Yes" : "No"}</td></tr>
+                      <tr key={r.date}>
+                        <td>{r.date}</td>
+                        <td className={r.uploaded ? "status-green" : "status-red"}>{r.uploaded ? "✓" : "—"}</td>
+                        {r.iqbar !== undefined && (<>
+                          <td className={r.iqbar ? "status-green" : "status-red"}>{r.iqbar ? "✓" : "—"}</td>
+                          <td className={r.iqmix ? "status-green" : "status-red"}>{r.iqmix ? "✓" : "—"}</td>
+                          <td className={r.iqjoe ? "status-green" : "status-red"}>{r.iqjoe ? "✓" : "—"}</td>
+                        </>)}
+                      </tr>
                     ))}
                   </tbody>
                 </table>

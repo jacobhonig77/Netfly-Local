@@ -2989,7 +2989,28 @@ def import_date_coverage(
     if start > end:
         start, end = end, start
     if ch == "Shopify":
-        tx_dates = set(read_df("SELECT DISTINCT date FROM shopify_line_daily WHERE date IS NOT NULL")["date"].astype(str).tolist())
+        line_df = read_df(
+            "SELECT DISTINCT date, product_line FROM shopify_line_daily WHERE date IS NOT NULL"
+        )
+        dates_by_line: dict[str, set] = {"IQBAR": set(), "IQMIX": set(), "IQJOE": set()}
+        if not line_df.empty:
+            for _, row in line_df.iterrows():
+                pl = str(row["product_line"]).upper()
+                if pl in dates_by_line:
+                    dates_by_line[pl].add(str(row["date"]))
+        all_dates = dates_by_line["IQBAR"] | dates_by_line["IQMIX"] | dates_by_line["IQJOE"]
+        rows = []
+        d = start
+        while d <= end:
+            k = str(d)
+            rows.append({
+                "date": k,
+                "uploaded": k in all_dates,
+                "iqbar": k in dates_by_line["IQBAR"],
+                "iqmix": k in dates_by_line["IQMIX"],
+                "iqjoe": k in dates_by_line["IQJOE"],
+            })
+            d += timedelta(days=1)
     else:
         tx_dates = set(
             read_df(
@@ -2997,12 +3018,12 @@ def import_date_coverage(
                 (ch,),
             )["date"].astype(str).tolist()
         )
-    rows = []
-    d = start
-    while d <= end:
-        k = str(d)
-        rows.append({"date": k, "uploaded": k in tx_dates})
-        d += timedelta(days=1)
+        rows = []
+        d = start
+        while d <= end:
+            k = str(d)
+            rows.append({"date": k, "uploaded": k in tx_dates})
+            d += timedelta(days=1)
     return {"rows": rows}
 
 
