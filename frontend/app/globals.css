@@ -789,6 +789,19 @@ html, body {
 .demand-signal.moderate { background: #fef9c3; color: #a16207; }
 .demand-signal.noisy    { background: #fee2e2; color: #dc2626; }
 
+.demand-drill-signal {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: var(--bg-secondary, #f7f8fa);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+}
+.demand-drill-label { color: var(--text-muted); font-weight: 500; }
+.demand-drill-range { color: var(--text-secondary, #444); font-variant-numeric: tabular-nums; }
+
 .chart-wrap {
   width: 100%;
   min-height: 260px;

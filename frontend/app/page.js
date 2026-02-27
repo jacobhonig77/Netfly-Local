@@ -3799,17 +3799,7 @@ export default function Page() {
                                 <td className="num-cell">{Number(r.wos || 0).toFixed(1)}</td>
                                 <td><span className="status-pill" style={{ background: statusColor(r.status) }}>{r.status}</span></td>
                                 <td className="num-cell">{`${Math.round(Number(r.pct_avail || 0) * 100)}%`}</td>
-                                <td className="num-cell">
-                                  <span>{Number(r.daily_demand || 0).toFixed(1)}</span>
-                                  {r.demand_cv > 0.05 && (
-                                    <span className="demand-range">
-                                      {Number(r.demand_low || 0).toFixed(0)}–{Number(r.demand_high || 0).toFixed(0)}
-                                      <span className={`demand-signal ${r.demand_cv > 0.35 ? "noisy" : r.demand_cv > 0.15 ? "moderate" : "stable"}`}>
-                                        {r.demand_cv > 0.35 ? "noisy" : r.demand_cv > 0.15 ? "mod" : "stable"}
-                                      </span>
-                                    </span>
-                                  )}
-                                </td>
+                                <td className="num-cell">{Number(r.daily_demand || 0).toFixed(1)}</td>
                                 <td className="num-cell">{Number(r.units_30d || 0).toLocaleString()}</td>
                                 <td className="num-cell">{Number(r.total_inventory || 0).toLocaleString()}</td>
                                 <td className="num-cell inbound-val">{Number(r.inbound || 0).toLocaleString()}</td>
@@ -3828,6 +3818,15 @@ export default function Page() {
                                           <option value="units">Units</option>
                                         </select>
                                         <span className="muted-text">L30 actual + next 30 day projection</span>
+                                        {r.demand_cv > 0.05 && (
+                                          <span className="demand-drill-signal">
+                                            <span className="demand-drill-label">Demand signal</span>
+                                            <span className={`demand-signal ${r.demand_cv > 0.35 ? "noisy" : r.demand_cv > 0.15 ? "moderate" : "stable"}`}>
+                                              {r.demand_cv > 0.35 ? "noisy" : r.demand_cv > 0.15 ? "moderate" : "stable"}
+                                            </span>
+                                            <span className="demand-drill-range">{Number(r.demand_low || 0).toFixed(0)}–{Number(r.demand_high || 0).toFixed(0)} units/day</span>
+                                          </span>
+                                        )}
                                       </div>
                                       <div className="chart-wrap">
                                         <ResponsiveContainer width="100%" height={220}>
@@ -3983,17 +3982,7 @@ export default function Page() {
                                 <td className="num-cell">{Number(r.wos || 0).toFixed(1)}</td>
                                 <td><span className="status-pill" style={{ background: statusColor(r.status) }}>{r.status}</span></td>
                                 <td className="num-cell">{`${Math.round(Number(r.pct_avail || 0) * 100)}%`}</td>
-                                <td className="num-cell">
-                                  <span>{Number(r.daily_demand || 0).toFixed(1)}</span>
-                                  {r.demand_cv > 0.05 && (
-                                    <span className="demand-range">
-                                      {Number(r.demand_low || 0).toFixed(0)}–{Number(r.demand_high || 0).toFixed(0)}
-                                      <span className={`demand-signal ${r.demand_cv > 0.35 ? "noisy" : r.demand_cv > 0.15 ? "moderate" : "stable"}`}>
-                                        {r.demand_cv > 0.35 ? "noisy" : r.demand_cv > 0.15 ? "mod" : "stable"}
-                                      </span>
-                                    </span>
-                                  )}
-                                </td>
+                                <td className="num-cell">{Number(r.daily_demand || 0).toFixed(1)}</td>
                                 <td className="num-cell">{Number(r.units_30d || 0).toLocaleString()}</td>
                                 <td className="num-cell">{Number(r.total_inventory || 0).toLocaleString()}</td>
                                 <td className="num-cell inbound-val">{Number(r.inbound || 0).toLocaleString()}</td>
@@ -4012,6 +4001,15 @@ export default function Page() {
                                           <option value="units">Units</option>
                                         </select>
                                         <span className="muted-text">L30 actual + next 30 day projection</span>
+                                        {r.demand_cv > 0.05 && (
+                                          <span className="demand-drill-signal">
+                                            <span className="demand-drill-label">Demand signal</span>
+                                            <span className={`demand-signal ${r.demand_cv > 0.35 ? "noisy" : r.demand_cv > 0.15 ? "moderate" : "stable"}`}>
+                                              {r.demand_cv > 0.35 ? "noisy" : r.demand_cv > 0.15 ? "moderate" : "stable"}
+                                            </span>
+                                            <span className="demand-drill-range">{Number(r.demand_low || 0).toFixed(0)}–{Number(r.demand_high || 0).toFixed(0)} units/day</span>
+                                          </span>
+                                        )}
                                       </div>
                                       <div className="chart-wrap">
                                         <ResponsiveContainer width="100%" height={220}>
