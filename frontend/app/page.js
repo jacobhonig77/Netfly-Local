@@ -6,6 +6,7 @@ import {
   ComposedChart,
   BarChart,
   Bar,
+  Cell,
   CartesianGrid,
   Tooltip,
   XAxis,
@@ -13,6 +14,7 @@ import {
   LineChart,
   Line,
   Legend,
+  ReferenceLine,
 } from "recharts";
 import { apiGet } from "../lib/api";
 import { fmtMoney, fmtPct, ymd } from "../lib/format";
@@ -310,6 +312,7 @@ export default function Page() {
   const [skuSummary, setSkuSummary] = useState([]);
   const [topMovers, setTopMovers] = useState(null);
   const [monthly, setMonthly] = useState({ rows: [], summary: {} });
+  const [weeklySeasonality, setWeeklySeasonality] = useState([]);
   const [forecast, setForecast] = useState(null);
   const [inventory, setInventory] = useState({ snapshot: null, rows: [], by_line: {} });
   const [inventoryHistory, setInventoryHistory] = useState([]);
@@ -788,6 +791,13 @@ export default function Page() {
       setActiveTab("sales");
     }
   }, [workspaceChannel, activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "business" || weeklySeasonality.length > 0) return;
+    apiGet("/api/seasonality/weekly-index", channelParams).then((d) => {
+      setWeeklySeasonality(d?.rows || []);
+    });
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!visibleTabs.some((t) => t.id === activeTab)) {
@@ -3549,6 +3559,39 @@ export default function Page() {
                 </ResponsiveContainer>
               </div>
             </section>
+
+            {weeklySeasonality.length > 0 && (
+              <section className="panel chart-panel">
+                <div className="chart-panel-header">
+                  <h3>52-Week Seasonality Index</h3>
+                  <span className="chart-subtitle">Each week's average sales vs the annual average (1.0 = average week)</span>
+                </div>
+                <div className="chart-wrap">
+                  <ResponsiveContainer width="100%" height={260}>
+                    <BarChart data={weeklySeasonality} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e8eaf0" />
+                      <XAxis dataKey="week_label" tick={{ fill: "#8b90a0", fontSize: 10 }} interval={3} />
+                      <YAxis
+                        tick={{ fill: "#8b90a0", fontSize: 11 }}
+                        tickFormatter={(v) => `${v.toFixed(1)}×`}
+                        domain={[0, "auto"]}
+                      />
+                      <ReferenceLine y={1} stroke="#8b90a0" strokeDasharray="4 2" strokeWidth={1.5} label={{ value: "avg", position: "right", fill: "#8b90a0", fontSize: 11 }} />
+                      <Tooltip
+                        contentStyle={{ background: "#fff", border: "1px solid #e8eaf0", borderRadius: 10, fontSize: 13 }}
+                        formatter={(v, _name, props) => [`${Number(v).toFixed(2)}× (${fmtMoney(props.payload.avg_sales)}/wk avg)`, "Index"]}
+                        labelFormatter={(l) => l}
+                      />
+                      <Bar dataKey="index" radius={[3, 3, 0, 0]}>
+                        {weeklySeasonality.map((entry) => (
+                          <Cell key={entry.week_label} fill={entry.index >= 1 ? "#4f46e5" : "#e2e4f0"} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </section>
+            )}
           </>
         )}
 
@@ -3756,7 +3799,17 @@ export default function Page() {
                                 <td className="num-cell">{Number(r.wos || 0).toFixed(1)}</td>
                                 <td><span className="status-pill" style={{ background: statusColor(r.status) }}>{r.status}</span></td>
                                 <td className="num-cell">{`${Math.round(Number(r.pct_avail || 0) * 100)}%`}</td>
-                                <td className="num-cell">{Number(r.daily_demand || 0).toFixed(1)}</td>
+                                <td className="num-cell">
+                                  <span>{Number(r.daily_demand || 0).toFixed(1)}</span>
+                                  {r.demand_cv > 0.05 && (
+                                    <span className="demand-range">
+                                      {Number(r.demand_low || 0).toFixed(0)}–{Number(r.demand_high || 0).toFixed(0)}
+                                      <span className={`demand-signal ${r.demand_cv > 0.35 ? "noisy" : r.demand_cv > 0.15 ? "moderate" : "stable"}`}>
+                                        {r.demand_cv > 0.35 ? "noisy" : r.demand_cv > 0.15 ? "mod" : "stable"}
+                                      </span>
+                                    </span>
+                                  )}
+                                </td>
                                 <td className="num-cell">{Number(r.units_30d || 0).toLocaleString()}</td>
                                 <td className="num-cell">{Number(r.total_inventory || 0).toLocaleString()}</td>
                                 <td className="num-cell inbound-val">{Number(r.inbound || 0).toLocaleString()}</td>
@@ -3930,7 +3983,17 @@ export default function Page() {
                                 <td className="num-cell">{Number(r.wos || 0).toFixed(1)}</td>
                                 <td><span className="status-pill" style={{ background: statusColor(r.status) }}>{r.status}</span></td>
                                 <td className="num-cell">{`${Math.round(Number(r.pct_avail || 0) * 100)}%`}</td>
-                                <td className="num-cell">{Number(r.daily_demand || 0).toFixed(1)}</td>
+                                <td className="num-cell">
+                                  <span>{Number(r.daily_demand || 0).toFixed(1)}</span>
+                                  {r.demand_cv > 0.05 && (
+                                    <span className="demand-range">
+                                      {Number(r.demand_low || 0).toFixed(0)}–{Number(r.demand_high || 0).toFixed(0)}
+                                      <span className={`demand-signal ${r.demand_cv > 0.35 ? "noisy" : r.demand_cv > 0.15 ? "moderate" : "stable"}`}>
+                                        {r.demand_cv > 0.35 ? "noisy" : r.demand_cv > 0.15 ? "mod" : "stable"}
+                                      </span>
+                                    </span>
+                                  )}
+                                </td>
                                 <td className="num-cell">{Number(r.units_30d || 0).toLocaleString()}</td>
                                 <td className="num-cell">{Number(r.total_inventory || 0).toLocaleString()}</td>
                                 <td className="num-cell inbound-val">{Number(r.inbound || 0).toLocaleString()}</td>

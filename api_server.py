@@ -2524,6 +2524,35 @@ def seasonality_calendar(year: int = date.today().year) -> dict:
     return {"rows": rows.to_dict(orient="records")}
 
 
+@app.get("/api/seasonality/weekly-index")
+def seasonality_weekly_index(channel: str = Query(default="Amazon")) -> dict:
+    """52-week seasonality index: each week's avg sales normalised to 1.0 = annual average."""
+    ch = normalize_channel(channel)
+    rows = read_df(
+        """
+        SELECT
+          CAST(strftime('%W', t.date) AS INTEGER) AS week_num,
+          CAST(strftime('%Y', t.date) AS INTEGER) AS year,
+          COALESCE(SUM(CASE WHEN m.product_line IN ('IQBAR','IQMIX','IQJOE') THEN t.sales_o_to_y ELSE 0 END), 0) AS weekly_sales
+        FROM transactions t
+        LEFT JOIN sku_mapping m ON UPPER(TRIM(t.sku)) = m.sku_key
+        WHERE t.channel = ?
+        GROUP BY week_num, year
+        ORDER BY year, week_num
+        """,
+        (ch,),
+    )
+    if rows.empty:
+        return {"rows": [], "mean_weekly_sales": 0}
+
+    weekly_avg = rows.groupby("week_num")["weekly_sales"].mean().reset_index()
+    weekly_avg.columns = ["week_num", "avg_sales"]
+    overall_mean = float(weekly_avg["avg_sales"].mean())
+    weekly_avg["index"] = (weekly_avg["avg_sales"] / overall_mean).round(3) if overall_mean > 0 else 1.0
+    weekly_avg["week_label"] = weekly_avg["week_num"].apply(lambda w: f"W{int(w):02d}")
+    return {"rows": weekly_avg.to_dict(orient="records"), "mean_weekly_sales": round(overall_mean, 2)}
+
+
 def _inventory_snapshot_payload(
     snapshot_id: int,
     snapshot_meta: sqlite3.Row,
@@ -2589,6 +2618,22 @@ def _inventory_snapshot_payload(
         + (inv["units_60d"] / 60.0) * (w60 / weight_total)
         + (inv["units_90d"] / 90.0) * (w90 / weight_total)
     )
+
+    # Demand confidence bands: CV across the four window averages
+    def _demand_cv(row: pd.Series) -> float:
+        vals = [row["units_7d"] / 7.0, row["units_30d"] / 30.0, row["units_60d"] / 60.0, row["units_90d"] / 90.0]
+        vals = [v for v in vals if v > 0]
+        if len(vals) < 2:
+            return 0.0
+        mean = sum(vals) / len(vals)
+        if mean == 0:
+            return 0.0
+        variance = sum((v - mean) ** 2 for v in vals) / len(vals)
+        return (variance ** 0.5) / mean
+
+    inv["demand_cv"] = inv.apply(_demand_cv, axis=1)
+    inv["demand_low"] = (inv["daily_demand"] * (1.0 - inv["demand_cv"])).clip(lower=0.0)
+    inv["demand_high"] = inv["daily_demand"] * (1.0 + inv["demand_cv"])
     inv["effective_inventory"] = inv.apply(
         lambda r: float(max(r["total_inventory"], r["available"] + r["inbound"])),
         axis=1,
@@ -2639,6 +2684,9 @@ def _inventory_snapshot_payload(
         "status",
         "pct_avail",
         "daily_demand",
+        "demand_low",
+        "demand_high",
+        "demand_cv",
         "units_30d",
         "total_inventory",
         "inbound",

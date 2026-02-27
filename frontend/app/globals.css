@@ -766,6 +766,28 @@ html, body {
 }
 
 .chart-panel-header h3 { margin: 0; }
+.chart-subtitle { font-size: 12px; color: var(--text-muted); margin-left: 10px; }
+
+/* ========== DEMAND CONFIDENCE BANDS ========== */
+.demand-range {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  white-space: nowrap;
+}
+.demand-signal {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.demand-signal.stable   { background: #dcfce7; color: #16a34a; }
+.demand-signal.moderate { background: #fef9c3; color: #a16207; }
+.demand-signal.noisy    { background: #fee2e2; color: #dc2626; }
 
 .chart-wrap {
   width: 100%;
